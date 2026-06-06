@@ -82,7 +82,7 @@ def save_as_numpy_archive(output_path, data, labels_1indexed, labels_0indexed, c
         data=data,
         labels_1indexed=labels_1indexed,
         labels_0indexed=labels_0indexed,
-        channels=np.array(channels, dtype=object),
+        channels=np.array(channels, dtype=str),
         time_points=time_points
     )
     print(f"Saved compressed NumPy dataset to: {output_path}")
