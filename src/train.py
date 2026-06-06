@@ -290,6 +290,7 @@ def plot_metrics_history(model_type, history):
     
     plt.tight_layout()
     plot_path = os.path.join(ROOT_DIR, "outputs", "figures", f"training_curves_{model_type}.png")
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
     plt.savefig(plot_path, dpi=150)
     plt.close()
     print(f"Saved {model_type.upper()} training curves plot as: {plot_path}")

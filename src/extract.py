@@ -81,6 +81,7 @@ def save_as_numpy_archive(output_path, data, labels_1indexed, labels_0indexed, c
     """
     Saves extracted arrays to a compressed .npz archive for lightning-fast loading in Python.
     """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     np.savez_compressed(
         output_path,
         data=data,
