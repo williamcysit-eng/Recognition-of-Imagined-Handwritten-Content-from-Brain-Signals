@@ -3,7 +3,7 @@ import scipy.io as sio
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Try to import torch and sklearn to make sure they are documented and available
+# Try to import torch and scikit-learn to make sure they are documented and available
 try:
     import torch
     from torch.utils.data import Dataset, DataLoader
@@ -16,6 +16,10 @@ try:
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
+
+# Resolve the absolute project root directory
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(SRC_DIR)
 
 
 def load_and_preprocess_eeg_data(mat_path):
@@ -95,7 +99,7 @@ def get_alphabet_letter(label_1indexed):
     return chr(ord('A') + label_1indexed - 1)
 
 
-def generate_visualizations(data, labels_1indexed, channels, time_points):
+def generate_visualizations(data, labels_1indexed, channels, time_points, figures_dir):
     """
     Plots and saves:
     1. Single trial EEG heatmap (channels x time points) for alphabet 'A'.
@@ -104,6 +108,7 @@ def generate_visualizations(data, labels_1indexed, channels, time_points):
     4. Average EEG line plot for alphabet 'A' across all its 300 trials.
     """
     print("\nGenerating data visualization plots to match the instructions' Figure 3...")
+    os.makedirs(figures_dir, exist_ok=True)
     
     # Index of trials corresponding to Alphabet 'A' (label = 1)
     indices_a = np.where(labels_1indexed == 1)[0]
@@ -133,7 +138,7 @@ def generate_visualizations(data, labels_1indexed, channels, time_points):
     plt.title("Figure 3(a): Single Trial EEG Heatmap (Alphabet 'A')")
     plt.axvline(x=0, color='black', linestyle='--', alpha=0.6, label='Stimulus Onset')
     plt.tight_layout()
-    plt.savefig('single_trial_heatmap_A.png', dpi=150)
+    plt.savefig(os.path.join(figures_dir, 'single_trial_heatmap_A.png'), dpi=150)
     plt.close()
     print("  - Saved 'single_trial_heatmap_A.png'")
     
@@ -149,7 +154,7 @@ def generate_visualizations(data, labels_1indexed, channels, time_points):
     plt.axvline(x=0, color='black', linestyle='--', alpha=0.6)
     plt.xlim(time_points[0], time_points[-1])
     plt.tight_layout()
-    plt.savefig('single_trial_lineplot_A.png', dpi=150)
+    plt.savefig(os.path.join(figures_dir, 'single_trial_lineplot_A.png'), dpi=150)
     plt.close()
     print("  - Saved 'single_trial_lineplot_A.png'")
 
@@ -165,7 +170,7 @@ def generate_visualizations(data, labels_1indexed, channels, time_points):
     plt.title(f"Figure 3(c): Averaged EEG Heatmap across {len(indices_a)} trials (Alphabet 'A')")
     plt.axvline(x=0, color='black', linestyle='--', alpha=0.6, label='Stimulus Onset')
     plt.tight_layout()
-    plt.savefig('average_heatmap_A.png', dpi=150)
+    plt.savefig(os.path.join(figures_dir, 'average_heatmap_A.png'), dpi=150)
     plt.close()
     print("  - Saved 'average_heatmap_A.png'")
     
@@ -181,7 +186,7 @@ def generate_visualizations(data, labels_1indexed, channels, time_points):
     plt.axvline(x=0, color='black', linestyle='--', alpha=0.6)
     plt.xlim(time_points[0], time_points[-1])
     plt.tight_layout()
-    plt.savefig('average_lineplot_A.png', dpi=150)
+    plt.savefig(os.path.join(figures_dir, 'average_lineplot_A.png'), dpi=150)
     plt.close()
     print("  - Saved 'average_lineplot_A.png'")
 
@@ -223,11 +228,10 @@ else:
 # Main pipeline execution
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Base paths
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    mat_filename = "data_EEG_AI.mat"
-    mat_path = os.path.join(current_dir, mat_filename)
-    npz_path = os.path.join(current_dir, "eeg_dataset.npz")
+    # Standard structured paths
+    mat_path = os.path.join(ROOT_DIR, "data", "raw", "data_EEG_AI.mat")
+    npz_path = os.path.join(ROOT_DIR, "data", "processed", "eeg_dataset.npz")
+    figures_dir = os.path.join(ROOT_DIR, "outputs", "figures")
     
     print("==========================================================")
     print("         EEG Handwriting Imagery Extraction Pipeline      ")
@@ -239,12 +243,12 @@ if __name__ == "__main__":
     # 2. Save NumPy Archive
     save_as_numpy_archive(npz_path, data, labels_1indexed, labels_0indexed, channels, time_points)
     
-    # 3. Generate visualization plots (recreates Figure 3 described in the docx)
-    generate_visualizations(data, labels_1indexed, channels, time_points)
+    # 3. Generate visualization plots (recreates Figure 3 described in the instructions)
+    generate_visualizations(data, labels_1indexed, channels, time_points, figures_dir)
     
     # 4. Demonstrate Stratified Train-Test Split if scikit-learn is available
     if SKLEARN_AVAILABLE:
-        print("\nDemonstrating Stratified Train-Test Split (80% Train, 20% Test)...")
+        print("\nDemonstrating Stratified Train-Test Split (80% Train, 20% Test) using scikit-learn...")
         X_train, X_test, y_train, y_test = train_test_split(
             data, 
             labels_0indexed, 
