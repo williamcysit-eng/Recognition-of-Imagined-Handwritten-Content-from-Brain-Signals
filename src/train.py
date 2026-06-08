@@ -30,6 +30,7 @@ try:
     from sklearn.model_selection import train_test_split
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import make_pipeline
     from sklearn.metrics import accuracy_score
     SKLEARN_AVAILABLE = True
 except ImportError:
@@ -778,17 +779,15 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
     X_train_flat = X_train.reshape(X_train.shape[0], -1)
     X_test_flat = X_test.reshape(X_test.shape[0], -1)
     
-    # Standard scale features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train_flat)
-    X_test_scaled = scaler.transform(X_test_flat)
+    # Force the baseline solver to actually converge using pipeline with standard scaling
+    baseline_model = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=400, C=0.05, random_state=RANDOM_SEED)
+    )
+    baseline_model.fit(X_train_flat, y_train)
     
-    # Fast Logistic Regression using lbfgs on CPU
-    baseline_model = LogisticRegression(C=0.01, solver='lbfgs', max_iter=30, random_state=RANDOM_SEED)
-    baseline_model.fit(X_train_scaled, y_train)
-    
-    train_acc = accuracy_score(y_train, baseline_model.predict(X_train_scaled)) * 100
-    test_acc = accuracy_score(y_test, baseline_model.predict(X_test_scaled)) * 100
+    train_acc = accuracy_score(y_train, baseline_model.predict(X_train_flat)) * 100
+    test_acc = accuracy_score(y_test, baseline_model.predict(X_test_flat)) * 100
     
     print(f"Baseline completed in {time.time() - t0:.1f}s")
     print(f"Baseline Train Accuracy: {train_acc:.2f}%")
