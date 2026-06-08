@@ -107,3 +107,161 @@ def apply_max_norm_constraints(model, max_norm_spatial=1.0, max_norm_fc=0.25):
             norms = torch.norm(param.data, p=2, dim=1, keepdim=True)
             desired = torch.clamp(norms, max=max_norm_fc)
             param.data *= (desired / (norms + 1e-10))
+
+
+class EEGNetEncoder(nn.Module):
+    """
+    EEGNet feature extractor that produces flat spatiotemporal embedding vectors.
+    """
+    def __init__(self, num_channels=24, input_time_points=401, temporal_kernel_length=64,
+                 F1=8, D=2, F2=16, dropout_rate=0.3):
+        super(EEGNetEncoder, self).__init__()
+        self.base = EEGNet82(
+            num_channels=num_channels,
+            num_classes=2,  # Dummy value for instantiating the base EEGNet FC size
+            F1=F1, D=D, F2=F2,
+            input_time_points=input_time_points,
+            temporal_kernel_length=temporal_kernel_length,
+            dropout_rate=dropout_rate
+        )
+        self.latent_dim = self.base.flat_features
+
+    def forward(self, x):
+        x = self.base.temporal_conv(x)
+        x = self.base.spatial_conv(x)
+        x = self.base.separable_conv(x)
+        x = torch.flatten(x, start_dim=1)
+        return x
+
+
+class EEGSpatiotemporalMasker(nn.Module):
+    """
+    Applies spatiotemporal masking to raw EEG signals.
+    Randomly zeros out continuous blocks of time across specific channel clusters.
+    """
+    def __init__(self, mask_ratio_time=0.3, mask_ratio_channels=0.3, min_block_len=10):
+        super(EEGSpatiotemporalMasker, self).__init__()
+        self.mask_ratio_time = mask_ratio_time
+        self.mask_ratio_channels = mask_ratio_channels
+        self.min_block_len = min_block_len
+
+    def forward(self, x):
+        if not self.training:
+            return x
+            
+        device = x.device
+        batch_size, _, num_channels, time_samples = x.shape
+        masked_x = x.clone()
+        
+        for b in range(batch_size):
+            num_masked_chans = max(1, int(num_channels * self.mask_ratio_channels))
+            masked_chans = torch.randperm(num_channels, device=device)[:num_masked_chans]
+            
+            block_len = max(self.min_block_len, int(time_samples * self.mask_ratio_time))
+            if time_samples > block_len:
+                t_start = torch.randint(0, time_samples - block_len, (1,), device=device).item()
+                t_end = t_start + block_len
+                masked_x[b, 0, masked_chans, t_start:t_end] = 0.0
+                
+        return masked_x
+
+
+class EEGJEPAPredictor(nn.Module):
+    """
+    Predicts the target latent embedding from the masked context embedding.
+    """
+    def __init__(self, latent_dim, hidden_dim=256):
+        super(EEGJEPAPredictor, self).__init__()
+        self.predictor = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ELU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim, latent_dim)
+        )
+
+    def forward(self, x):
+        return self.predictor(x)
+
+
+class EEGJEPA(nn.Module):
+    """
+    Joint Embedding Predictive Architecture (JEPA) for EEG spatiotemporal representation learning.
+    """
+    def __init__(self, num_channels=24, input_time_points=401, temporal_kernel_length=64, 
+                 F1=8, D=2, F2=16, dropout_rate=0.3, mask_ratio_time=0.3, 
+                 mask_ratio_channels=0.3, min_block_len=10, ema_decay=0.99):
+        super(EEGJEPA, self).__init__()
+        
+        self.ema_decay = ema_decay
+        
+        self.online_encoder = EEGNetEncoder(
+            num_channels=num_channels,
+            input_time_points=input_time_points,
+            temporal_kernel_length=temporal_kernel_length,
+            F1=F1, D=D, F2=F2,
+            dropout_rate=dropout_rate
+        )
+        
+        self.target_encoder = EEGNetEncoder(
+            num_channels=num_channels,
+            input_time_points=input_time_points,
+            temporal_kernel_length=temporal_kernel_length,
+            F1=F1, D=D, F2=F2,
+            dropout_rate=dropout_rate
+        )
+        
+        self.reset_target_encoder()
+        
+        for param in self.target_encoder.parameters():
+            param.requires_grad = False
+            
+        self.masker = EEGSpatiotemporalMasker(
+            mask_ratio_time=mask_ratio_time,
+            mask_ratio_channels=mask_ratio_channels,
+            min_block_len=min_block_len
+        )
+        
+        self.predictor = EEGJEPAPredictor(
+            latent_dim=self.online_encoder.latent_dim,
+            hidden_dim=256
+        )
+
+    def reset_target_encoder(self):
+        self.target_encoder.load_state_dict(self.online_encoder.state_dict())
+
+    @torch.no_grad()
+    def update_target_ema(self):
+        for online_param, target_param in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
+            target_param.data.mul_(self.ema_decay).add_(online_param.data, alpha=1.0 - self.ema_decay)
+
+    def forward(self, raw_eeg):
+        with torch.no_grad():
+            target_embeddings = self.target_encoder(raw_eeg)
+            
+        masked_eeg = self.masker(raw_eeg)
+        context_embeddings = self.online_encoder(masked_eeg)
+        predicted_embeddings = self.predictor(context_embeddings)
+        
+        return predicted_embeddings, target_embeddings
+
+
+def compute_sigreg_loss(embeddings):
+    """
+    SIGReg (Gaussian Regularization): Enforces that the dimensions of the latent 
+    embeddings are Gaussian-distributed.
+    This is achieved by penalizing deviations of the mean from 0 and the standard
+    deviation from 1.0 across the batch.
+    """
+    # Prevent divide by zero / NaN in case of standard deviation on small batch sizes
+    eps = 1e-6
+    
+    # Mean of each feature across the batch should be 0
+    mean_loss = torch.mean(embeddings.mean(dim=0) ** 2)
+    
+    # Standard deviation of each feature across the batch should be 1.0
+    # Add a small epsilon to standard deviation computation for numerical stability
+    std_dev = torch.sqrt(embeddings.var(dim=0, unbiased=False) + eps)
+    std_loss = torch.mean((std_dev - 1.0) ** 2)
+    
+    return mean_loss + std_loss

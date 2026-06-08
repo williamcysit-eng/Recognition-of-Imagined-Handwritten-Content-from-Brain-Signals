@@ -12,7 +12,7 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 # Import models and custom dataset
-from models import LightEEG2DCNN, EEGNet82, apply_max_norm_constraints
+from models import LightEEG2DCNN, EEGNet82, apply_max_norm_constraints, EEGJEPA, compute_sigreg_loss
 from src.extract import EEGDataset
 
 # Try to import PyTorch and scikit-learn
@@ -233,6 +233,155 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     return best_model, history, device
 
 
+def train_jepa_model(X_train, y_train, X_val, y_val, channels_count, time_points_count, 
+                     num_epochs=15, batch_size=128, lr=0.001, temporal_kernel=64,
+                     reg_weight=0.1):
+    """
+    Trains the EEGJEPA self-supervised world model (next-embedding prediction + SIGReg).
+    Saves the best model based on validation prediction loss.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"\nInitializing EEGJEPA on device: {device}")
+    
+    model = EEGJEPA(
+        num_channels=channels_count,
+        input_time_points=time_points_count,
+        temporal_kernel_length=temporal_kernel,
+        dropout_rate=0.3
+    ).to(device)
+    
+    best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_jepa.pth")
+    os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    
+    # Datasets and Loaders
+    train_dataset = EEGDataset(X_train, y_train)
+    val_dataset = EEGDataset(X_val, y_val)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    
+    # Optimizer & Scheduler
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.02)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+    
+    best_val_loss = float('inf')
+    best_epoch = 1
+    
+    history = {
+        'train_loss': [], 'train_mse': [], 'train_reg': [],
+        'val_loss': [], 'val_mse': [], 'val_reg': []
+    }
+    
+    print("\nStarting EEGJEPA Training Loop...")
+    print("-" * 80)
+    print(f"{'Epoch':<8}{'Train Loss':<12}{'Train MSE':<12}{'Train Reg':<12}{'Val Loss':<12}{'Val MSE':<12}{'Time (s)':<8}")
+    print("-" * 80)
+    
+    for epoch in range(1, num_epochs + 1):
+        t0 = time.time()
+        
+        # Training Phase
+        model.train()
+        train_loss = 0.0
+        train_mse = 0.0
+        train_reg = 0.0
+        total_samples = 0
+        
+        for batch_x, _ in train_loader:  # Target class label is ignored
+            batch_x = batch_x.to(device)
+            
+            optimizer.zero_grad()
+            pred_embed, target_embed = model(batch_x)
+            
+            # Predictor loss (L2 MSE distance)
+            mse = nn.functional.mse_loss(pred_embed, target_embed)
+            
+            # Regularization constraint (SIGReg on predicted embeddings to prevent collapse)
+            reg = compute_sigreg_loss(pred_embed)
+            
+            loss = mse + reg_weight * reg
+            
+            loss.backward()
+            optimizer.step()
+            
+            # Target Encoder EMA weight update
+            model.update_target_ema()
+            
+            # Max-Norm constraints step for both Online and Target Encoders (reusing eegnet step)
+            apply_max_norm_constraints(model.online_encoder)
+            apply_max_norm_constraints(model.target_encoder)
+            
+            batch_size_curr = batch_x.size(0)
+            train_loss += loss.item() * batch_size_curr
+            train_mse += mse.item() * batch_size_curr
+            train_reg += reg.item() * batch_size_curr
+            total_samples += batch_size_curr
+            
+        epoch_train_loss = train_loss / total_samples
+        epoch_train_mse = train_mse / total_samples
+        epoch_train_reg = train_reg / total_samples
+        
+        # Validation Phase
+        model.eval()
+        val_loss = 0.0
+        val_mse = 0.0
+        val_reg = 0.0
+        total_val_samples = 0
+        
+        with torch.no_grad():
+            for batch_x, _ in val_loader:
+                batch_x = batch_x.to(device)
+                pred_embed, target_embed = model(batch_x)
+                
+                mse = nn.functional.mse_loss(pred_embed, target_embed)
+                reg = compute_sigreg_loss(pred_embed)
+                loss = mse + reg_weight * reg
+                
+                batch_size_curr = batch_x.size(0)
+                val_loss += loss.item() * batch_size_curr
+                val_mse += mse.item() * batch_size_curr
+                val_reg += reg.item() * batch_size_curr
+                total_val_samples += batch_size_curr
+                
+        epoch_val_loss = val_loss / total_val_samples
+        epoch_val_mse = val_mse / total_val_samples
+        epoch_val_reg = val_reg / total_val_samples
+        epoch_time = time.time() - t0
+        
+        # Log history
+        history['train_loss'].append(epoch_train_loss)
+        history['train_mse'].append(epoch_train_mse)
+        history['train_reg'].append(epoch_train_reg)
+        history['val_loss'].append(epoch_val_loss)
+        history['val_mse'].append(epoch_val_mse)
+        history['val_reg'].append(epoch_val_reg)
+        
+        scheduler.step(epoch_val_loss)
+        
+        print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_mse:<12.4f}{epoch_train_reg:<12.4f}{epoch_val_loss:<12.4f}{epoch_val_mse:<12.4f}{epoch_time:<8.1f}")
+        
+        # Validation loss checkpointing (lower is better)
+        if epoch_val_loss < best_val_loss:
+            best_val_loss = epoch_val_loss
+            best_epoch = epoch
+            torch.save(model.state_dict(), best_model_path)
+            
+    print("-" * 80)
+    print(f"Best EEGJEPA Validation Loss: {best_val_loss:.4f} achieved at Epoch {best_epoch}")
+    print(f"Loading optimal model weights from Epoch {best_epoch}...")
+    
+    # Reload optimal model weights
+    best_model = EEGJEPA(
+        num_channels=channels_count,
+        input_time_points=time_points_count,
+        temporal_kernel_length=temporal_kernel,
+        dropout_rate=0.3
+    ).to(device)
+    
+    best_model.load_state_dict(torch.load(best_model_path, map_location=device))
+    return best_model, history, device
+
+
 # -----------------------------------------------------------------------------
 # 3. Model Testing and Metrics Plotting
 # -----------------------------------------------------------------------------
@@ -296,6 +445,74 @@ def plot_metrics_history(model_type, history):
     print(f"Saved {model_type.upper()} training curves plot as: {plot_path}")
 
 
+def evaluate_jepa_on_test_set(model, X_test, y_test, device, reg_weight=0.1):
+    """
+    Evaluates the trained JEPA model on the test dataset.
+    """
+    test_dataset = EEGDataset(X_test, y_test)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    
+    model.eval()
+    total_loss = 0.0
+    total_mse = 0.0
+    total_samples = 0
+    
+    with torch.no_grad():
+        for batch_x, _ in test_loader:
+            batch_x = batch_x.to(device)
+            pred_embed, target_embed = model(batch_x)
+            
+            mse = nn.functional.mse_loss(pred_embed, target_embed)
+            reg = compute_sigreg_loss(pred_embed)
+            loss = mse + reg_weight * reg
+            
+            batch_size_curr = batch_x.size(0)
+            total_loss += loss.item() * batch_size_curr
+            total_mse += mse.item() * batch_size_curr
+            total_samples += batch_size_curr
+            
+    avg_loss = total_loss / total_samples
+    avg_mse = total_mse / total_samples
+    print(f"EEGJEPA Final Held-Out Test Loss: {avg_loss:.4f} (MSE: {avg_mse:.4f})")
+    return avg_loss
+
+
+def plot_jepa_metrics_history(history):
+    """
+    Generates and saves the loss and MSE metrics plots for EEGJEPA.
+    """
+    epochs = range(1, len(history['train_loss']) + 1)
+    
+    plt.figure(figsize=(12, 5))
+    
+    # Loss curves
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs, history['train_loss'], 'b-o', label='Training Loss')
+    plt.plot(epochs, history['val_loss'], 'r-s', label='Validation Loss')
+    plt.title('EEGJEPA Training and Validation Total Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # MSE curves
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs, history['train_mse'], 'b-o', label='Training MSE')
+    plt.plot(epochs, history['val_mse'], 'r-s', label='Validation MSE')
+    plt.title('EEGJEPA Training and Validation Next-Embedding MSE')
+    plt.xlabel('Epochs')
+    plt.ylabel('Mean Squared Error')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plot_path = os.path.join(ROOT_DIR, "outputs", "figures", "training_curves_jepa.png")
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+    print(f"Saved EEGJEPA training curves plot as: {plot_path}")
+
+
 # -----------------------------------------------------------------------------
 # 4. Baseline Machine Learning Classifier
 # -----------------------------------------------------------------------------
@@ -333,7 +550,7 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
-    parser.add_argument("--model", type=str, choices=["2d_cnn", "eegnet", "both"], default="2d_cnn",
+    parser.add_argument("--model", type=str, choices=["2d_cnn", "eegnet", "both", "jepa"], default="2d_cnn",
                         help="Model architecture to train (default: 2d_cnn)")
     parser.add_argument("--downsample", type=int, default=5,
                         help="Downsampling factor for time series (default: 5 for fast CPU execution)")
@@ -370,6 +587,32 @@ if __name__ == "__main__":
     results = {}
     
     # Determine models to run
+    if args.model == "jepa":
+        # JEPA self-supervised world model training
+        jepa_model, history, device = train_jepa_model(
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            channels_count=channels_count,
+            time_points_count=time_points_count,
+            num_epochs=args.epochs,
+            batch_size=128,
+            lr=0.001,
+            temporal_kernel=temporal_kernel_len
+        )
+        
+        plot_jepa_metrics_history(history)
+        
+        test_loss = evaluate_jepa_on_test_set(jepa_model, X_test, y_test, device)
+        
+        print("\n" + "="*50)
+        print("                  JEPA PIPELINE COMPLETED                 ")
+        print("="*50)
+        print(f"  * EEGJEPA Final Held-Out Test Loss: {test_loss:.4f}")
+        print("="*50 + "\n")
+        sys.exit(0)
+        
     models_to_train = []
     if args.model == "2d_cnn" or args.model == "both":
         models_to_train.append("2d_cnn")
