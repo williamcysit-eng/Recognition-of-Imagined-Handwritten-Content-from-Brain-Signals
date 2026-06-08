@@ -24,7 +24,7 @@ class EEGNet82(nn.Module):
     temporal_kernel_length: int
         Size of temporal filters, scaled to sampling rate. Typically sampling_rate // 2.
     """
-    def __init__(self, num_channels=24, num_classes=26, F1=8, D=2, F2=16, 
+    def __init__(self, num_channels=24, num_classes=26, F1=16, D=4, F2=64, 
                  input_time_points=401, temporal_kernel_length=64, dropout_rate=0.3):
         super(EEGNet82, self).__init__()
         
@@ -66,7 +66,10 @@ class EEGNet82(nn.Module):
         
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(self.flat_features, num_classes)
+            nn.Linear(self.flat_features, 128),
+            nn.ELU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, num_classes)
         )
 
     def _get_fc_input_size(self):
