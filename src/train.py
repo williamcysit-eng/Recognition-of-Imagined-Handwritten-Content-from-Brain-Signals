@@ -92,6 +92,52 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=5):
     return X_train, y_train, X_val, y_val, X_test, y_test, channels, time_points
 
 
+def evaluate_multi_trial_averaging(model, X, y, device, group_size=5):
+    """
+    Groups trials of the same letter (class) together in chunks of `group_size` (3 to 5),
+    calculates the average probability vector (softmax output) across the group,
+    and returns the averaged classification accuracy.
+    """
+    model.eval()
+    unique_classes = np.unique(y)
+    total_groups = 0
+    correct_groups = 0
+    
+    with torch.no_grad():
+        for c in unique_classes:
+            # Get all indices for class c
+            indices = np.where(y == c)[0]
+            num_trials = len(indices)
+            
+            # Chunk indices into groups of group_size
+            for i in range(0, num_trials, group_size):
+                group_idx = indices[i:i + group_size]
+                if len(group_idx) < group_size:
+                    # Skip incomplete last group to ensure equal averaging weight
+                    continue
+                
+                # Fetch trials in the group and convert to PyTorch tensor
+                trials = X[group_idx]  # Shape: (group_size, channels, time_points)
+                trials_tensor = torch.tensor(trials, dtype=torch.float32).unsqueeze(1).to(device)
+                
+                # Forward pass
+                logits = model(trials_tensor)  # Shape: (group_size, num_classes)
+                probs = torch.softmax(logits, dim=1)  # Get probability vectors
+                
+                # Average probability vector across the group
+                mean_probs = torch.mean(probs, dim=0)  # Shape: (num_classes,)
+                
+                # Predicted class
+                pred_class = torch.argmax(mean_probs).item()
+                
+                if pred_class == c:
+                    correct_groups += 1
+                total_groups += 1
+                
+    accuracy = (correct_groups / total_groups) * 100 if total_groups > 0 else 0.0
+    return accuracy
+
+
 # -----------------------------------------------------------------------------
 # 2. General Training Loop
 # -----------------------------------------------------------------------------
@@ -156,13 +202,14 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     
     history = {
         'train_loss': [], 'train_acc': [],
-        'val_loss': [], 'val_acc': []
+        'val_loss': [], 'val_acc': [],
+        'val_mt_acc': []
     }
     
     print(f"\nStarting {model_type.upper()} Training Loop...")
-    print("-" * 65)
-    print(f"{'Epoch':<8}{'Train Loss':<12}{'Train Acc (%)':<15}{'Val Loss':<12}{'Val Acc (%)':<15}{'Time (s)':<8}")
-    print("-" * 65)
+    print("-" * 80)
+    print(f"{'Epoch':<8}{'Train Loss':<12}{'Train Acc (%)':<15}{'Val Loss':<12}{'Val Acc (%)':<15}{'Val MT5 (%)':<15}{'Time (s)':<8}")
+    print("-" * 80)
     
     for epoch in range(1, num_epochs + 1):
         t0 = time.time()
@@ -221,10 +268,14 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         history['val_loss'].append(epoch_val_loss)
         history['val_acc'].append(epoch_val_acc)
         
+        # Calculate validation Multi-Trial evaluation averaging accuracy (group size K=5)
+        val_mt_acc = evaluate_multi_trial_averaging(model, X_val, y_val, device, group_size=5)
+        history['val_mt_acc'].append(val_mt_acc)
+        
         # ReduceLROnPlateau scheduler step based on validation loss
         scheduler.step(epoch_val_loss)
         
-        print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{epoch_time:<8.1f}")
+        print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{val_mt_acc:<15.2f}{epoch_time:<8.1f}")
         
         # Validation loss checkpointing & Early Stopping
         if epoch_val_loss < best_val_loss:
@@ -239,8 +290,8 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             print(f"Early stopping triggered! No improvement in validation loss for {patience} consecutive epochs.")
             break
             
-    print("-" * 65)
-    print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
+    print("-" * 80)
+    print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%, Multi-Trial K=5: {history['val_mt_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
     print(f"Loading optimal model weights from Epoch {best_epoch} (prevents overfitting)...")
     
     # Reload optimal model weights
@@ -580,6 +631,7 @@ def train_jepa_downstream_classifier(model_type, X_train, y_train, X_val, y_val,
 def evaluate_model_on_test_set(model_type, model, X_test, y_test, device):
     """
     Evaluates the loaded model on the test dataset.
+    Computes both single-trial accuracy and multi-trial evaluation averaging (group sizes 3, 4, 5).
     """
     test_dataset = EEGDataset(X_test, y_test)
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
@@ -597,7 +649,14 @@ def evaluate_model_on_test_set(model_type, model, X_test, y_test, device):
             total += batch_y.size(0)
             
     test_acc = (correct / total) * 100
-    print(f"{model_type.upper()} Final Held-Out Test Accuracy: {test_acc:.2f}%")
+    print(f"\n--- {model_type.upper()} EVALUATION METRICS ---")
+    print(f"  * Single-Trial Held-Out Test Accuracy: {test_acc:.2f}%")
+    
+    # Compute multi-trial averaging for group sizes 3, 4, 5
+    for k in [3, 4, 5]:
+        mt_acc = evaluate_multi_trial_averaging(model, X_test, y_test, device, group_size=k)
+        print(f"  * Multi-Trial Averaged Accuracy (K={k}): {mt_acc:.2f}%")
+        
     return test_acc
 
 
