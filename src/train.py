@@ -130,8 +130,17 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01 if model_type == "2d_cnn" else 0.02)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.02 if model_type == "2d_cnn" else 0.05)
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=lr,
+        steps_per_epoch=len(train_loader),
+        epochs=num_epochs,
+        pct_start=0.2,  # 20% warmup
+        anneal_strategy='cos',
+        div_factor=10.0,
+        final_div_factor=100.0
+    )
     
     best_val_acc = 0.0
     best_epoch = 1
@@ -168,6 +177,9 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             if model_type == "eegnet":
                 apply_max_norm_constraints(model)
                 
+            # Step the OneCycleLR batch-level scheduler
+            scheduler.step()
+                
             train_loss += loss.item() * batch_x.size(0)
             _, predicted = outputs.max(1)
             correct_train += predicted.eq(batch_y).sum().item()
@@ -203,7 +215,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         history['val_loss'].append(epoch_val_loss)
         history['val_acc'].append(epoch_val_acc)
         
-        scheduler.step(epoch_val_acc)
+        # OneCycleLR is stepped at the batch level, no epoch-level step needed here
         
         print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{epoch_time:<8.1f}")
         
