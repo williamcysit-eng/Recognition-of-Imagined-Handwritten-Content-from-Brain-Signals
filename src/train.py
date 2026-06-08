@@ -12,7 +12,7 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 # Import models and custom dataset
-from models import LightEEG2DCNN, EEGNet82, apply_max_norm_constraints, EEGJEPA, compute_sigreg_loss, EEGJEPAClassifier
+from models import LightEEG2DCNN, EEGNet82, apply_max_norm_constraints, EEGJEPA, compute_sigreg_loss, EEGJEPAClassifier, EEGConformer
 from src.extract import EEGDataset
 
 # Try to import PyTorch and scikit-learn
@@ -117,6 +117,14 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             dropout_rate=0.3
         ).to(device)
         best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_eegnet.pth")
+    elif model_type == "conformer":
+        model = EEGConformer(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            dropout_rate=0.3
+        ).to(device)
+        best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_conformer.pth")
     else:
         raise ValueError(f"Unknown model type: {model_type}")
         
@@ -238,12 +246,19 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     # Reload optimal model weights
     if model_type == "2d_cnn":
         best_model = LightEEG2DCNN(num_classes=26).to(device)
-    else:
+    elif model_type == "eegnet":
         best_model = EEGNet82(
             num_channels=channels_count,
             num_classes=26,
             input_time_points=time_points_count,
             temporal_kernel_length=temporal_kernel,
+            dropout_rate=0.3
+        ).to(device)
+    elif model_type == "conformer":
+        best_model = EEGConformer(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
             dropout_rate=0.3
         ).to(device)
         
@@ -727,7 +742,7 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
-    parser.add_argument("--model", type=str, choices=["2d_cnn", "eegnet", "both", "jepa", "jepa_probe", "jepa_finetune"], default="2d_cnn",
+    parser.add_argument("--model", type=str, choices=["2d_cnn", "eegnet", "conformer", "both", "jepa", "jepa_probe", "jepa_finetune"], default="2d_cnn",
                         help="Model architecture to train (default: 2d_cnn)")
     parser.add_argument("--downsample", type=int, default=5,
                         help="Downsampling factor for time series (default: 5 for fast CPU execution)")
@@ -822,6 +837,8 @@ if __name__ == "__main__":
         models_to_train.append("2d_cnn")
     if args.model == "eegnet" or args.model == "both":
         models_to_train.append("eegnet")
+    if args.model == "conformer" or args.model == "both":
+        models_to_train.append("conformer")
         
     # Run Deep Learning models
     for model_type in models_to_train:
