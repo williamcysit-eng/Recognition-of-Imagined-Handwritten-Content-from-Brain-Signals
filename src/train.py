@@ -12,7 +12,7 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 # Import models and custom dataset
-from models import LightEEG2DCNN, EEGNet82, apply_max_norm_constraints, EEGJEPA, compute_sigreg_loss
+from models import LightEEG2DCNN, EEGNet82, apply_max_norm_constraints, EEGJEPA, compute_sigreg_loss, EEGJEPAClassifier
 from src.extract import EEGDataset
 
 # Try to import PyTorch and scikit-learn
@@ -382,6 +382,165 @@ def train_jepa_model(X_train, y_train, X_val, y_val, channels_count, time_points
     return best_model, history, device
 
 
+def train_jepa_downstream_classifier(model_type, X_train, y_train, X_val, y_val,
+                                     channels_count, time_points_count, num_epochs=15,
+                                     batch_size=128, lr=0.005, temporal_kernel=64):
+    """
+    Loads pre-trained EEGJEPA weights, instantiates EEGJEPAClassifier, and trains 
+    it for downstream letter classification (0 to 25).
+    
+    If model_type == "jepa_probe", the encoder weights are frozen (Linear Probing).
+    If model_type == "jepa_finetune", the encoder weights are trainable (Fine-Tuning).
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"\nInitializing Downstream Classifier ({model_type.upper()}) on device: {device}")
+    
+    # 1. Instantiate the JEPA architecture first to load checkpoints
+    jepa_model = EEGJEPA(
+        num_channels=channels_count,
+        input_time_points=time_points_count,
+        temporal_kernel_length=temporal_kernel,
+        dropout_rate=0.3
+    ).to(device)
+    
+    jepa_checkpoint = os.path.join(ROOT_DIR, "models", "checkpoints", "best_jepa.pth")
+    if not os.path.exists(jepa_checkpoint):
+        print(f"Pre-trained JEPA weights not found at: {jepa_checkpoint}")
+        print("Automatically performing self-supervised JEPA pre-training first...")
+        # Train JEPA first for half epochs to get the pre-trained weights
+        jepa_model, _, _ = train_jepa_model(
+            X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+            channels_count=channels_count, time_points_count=time_points_count,
+            num_epochs=max(5, num_epochs // 2), batch_size=batch_size, lr=0.001,
+            temporal_kernel=temporal_kernel
+        )
+    else:
+        print(f"Loading optimal pre-trained JEPA weights from: {jepa_checkpoint}")
+        jepa_model.load_state_dict(torch.load(jepa_checkpoint, map_location=device))
+        
+    # 2. Extract the pre-trained online encoder
+    encoder = jepa_model.online_encoder
+    
+    # 3. Create the classifier
+    freeze_encoder = (model_type == "jepa_probe")
+    model = EEGJEPAClassifier(
+        encoder=encoder,
+        num_classes=26,
+        freeze_encoder=freeze_encoder
+    ).to(device)
+    
+    best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", f"best_{model_type}.pth")
+    os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+    
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Classifier parameters: {total_params:,} (Trainable: {trainable_params:,})")
+    
+    # Datasets and Loaders
+    train_dataset = EEGDataset(X_train, y_train)
+    val_dataset = EEGDataset(X_val, y_val)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    
+    criterion = nn.CrossEntropyLoss()
+    # If probe, we only optimize self.fc parameters. If finetune, we optimize everything.
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
+    
+    best_val_acc = 0.0
+    best_epoch = 1
+    
+    history = {
+        'train_loss': [], 'train_acc': [],
+        'val_loss': [], 'val_acc': []
+    }
+    
+    print(f"\nStarting {model_type.upper()} Downstream Training...")
+    print("-" * 65)
+    print(f"{'Epoch':<8}{'Train Loss':<12}{'Train Acc (%)':<15}{'Val Loss':<12}{'Val Acc (%)':<15}{'Time (s)':<8}")
+    print("-" * 65)
+    
+    for epoch in range(1, num_epochs + 1):
+        t0 = time.time()
+        
+        # Training Phase
+        model.train()
+        train_loss = 0.0
+        correct_train = 0
+        total_train = 0
+        
+        for batch_x, batch_y in train_loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(batch_x)
+            loss = criterion(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
+            
+            # Since our encoder wraps standard EEGNet layers, apply the max-norm constraint on the encoder part
+            apply_max_norm_constraints(model.encoder)
+                
+            train_loss += loss.item() * batch_x.size(0)
+            _, predicted = outputs.max(1)
+            correct_train += predicted.eq(batch_y).sum().item()
+            total_train += batch_y.size(0)
+            
+        epoch_train_loss = train_loss / total_train
+        epoch_train_acc = (correct_train / total_train) * 100
+        
+        # Validation Phase
+        model.eval()
+        val_loss = 0.0
+        correct_val = 0
+        total_val = 0
+        
+        with torch.no_grad():
+            for batch_x, batch_y in val_loader:
+                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+                outputs = model(batch_x)
+                loss = criterion(outputs, batch_y)
+                
+                val_loss += loss.item() * batch_x.size(0)
+                _, predicted = outputs.max(1)
+                correct_val += predicted.eq(batch_y).sum().item()
+                total_val += batch_y.size(0)
+                
+        epoch_val_loss = val_loss / total_val
+        epoch_val_acc = (correct_val / total_val) * 100
+        epoch_time = time.time() - t0
+        
+        # Log history
+        history['train_loss'].append(epoch_train_loss)
+        history['train_acc'].append(epoch_train_acc)
+        history['val_loss'].append(epoch_val_loss)
+        history['val_acc'].append(epoch_val_acc)
+        
+        scheduler.step(epoch_val_acc)
+        
+        print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{epoch_time:<8.1f}")
+        
+        # Validation accuracy checkpointing
+        if epoch_val_acc > best_val_acc:
+            best_val_acc = epoch_val_acc
+            best_epoch = epoch
+            torch.save(model.state_dict(), best_model_path)
+            
+    print("-" * 65)
+    print(f"Best {model_type.upper()} Validation Accuracy: {best_val_acc:.2f}% achieved at Epoch {best_epoch}")
+    print(f"Loading optimal model weights from Epoch {best_epoch}...")
+    
+    # Reload optimal model weights
+    best_model = EEGJEPAClassifier(
+        encoder=encoder,
+        num_classes=26,
+        freeze_encoder=freeze_encoder
+    ).to(device)
+    
+    best_model.load_state_dict(torch.load(best_model_path, map_location=device))
+    return best_model, history, device
+
+
 # -----------------------------------------------------------------------------
 # 3. Model Testing and Metrics Plotting
 # -----------------------------------------------------------------------------
@@ -550,7 +709,7 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
-    parser.add_argument("--model", type=str, choices=["2d_cnn", "eegnet", "both", "jepa"], default="2d_cnn",
+    parser.add_argument("--model", type=str, choices=["2d_cnn", "eegnet", "both", "jepa", "jepa_probe", "jepa_finetune"], default="2d_cnn",
                         help="Model architecture to train (default: 2d_cnn)")
     parser.add_argument("--downsample", type=int, default=5,
                         help="Downsampling factor for time series (default: 5 for fast CPU execution)")
@@ -610,6 +769,33 @@ if __name__ == "__main__":
         print("                  JEPA PIPELINE COMPLETED                 ")
         print("="*50)
         print(f"  * EEGJEPA Final Held-Out Test Loss: {test_loss:.4f}")
+        print("="*50 + "\n")
+        sys.exit(0)
+        
+    elif args.model in ["jepa_probe", "jepa_finetune"]:
+        # Pre-trained JEPA downstream classification training (linear probe or fine-tune)
+        model, history, device = train_jepa_downstream_classifier(
+            model_type=args.model,
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            channels_count=channels_count,
+            time_points_count=time_points_count,
+            num_epochs=args.epochs,
+            batch_size=128,
+            lr=0.005,
+            temporal_kernel=temporal_kernel_len
+        )
+        
+        plot_metrics_history(args.model, history)
+        
+        test_acc = evaluate_model_on_test_set(args.model, model, X_test, y_test, device)
+        
+        print("\n" + "="*50)
+        print("             JEPA DOWNSTREAM PIPELINE COMPLETED           ")
+        print("="*50)
+        print(f"  * {args.model.upper()} Final Held-Out Test Accuracy: {test_acc:.2f}%")
         print("="*50 + "\n")
         sys.exit(0)
         

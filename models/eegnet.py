@@ -265,3 +265,31 @@ def compute_sigreg_loss(embeddings):
     std_loss = torch.mean((std_dev - 1.0) ** 2)
     
     return mean_loss + std_loss
+
+
+class EEGJEPAClassifier(nn.Module):
+    """
+    Downstream classification model that wraps a pre-trained EEGNetEncoder.
+    Can be used for Linear Probing (encoder frozen) or Fine-Tuning (encoder trainable).
+    """
+    def __init__(self, encoder, num_classes=26, freeze_encoder=True):
+        super(EEGJEPAClassifier, self).__init__()
+        self.encoder = encoder
+        
+        if freeze_encoder:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+                
+        # A 2-layer projection classification head similar to LightEEG2DCNN's fc to keep capacity high
+        self.fc = nn.Sequential(
+            nn.Linear(self.encoder.latent_dim, 64),
+            nn.ELU(),
+            nn.Dropout(0.4),
+            nn.Linear(64, num_classes)
+        )
+
+    def forward(self, x):
+        # Extract embeddings
+        z = self.encoder(x)
+        # Classify
+        return self.fc(z)
