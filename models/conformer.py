@@ -16,8 +16,8 @@ class EEGConformer(nn.Module):
             nn.Conv2d(1, temporal_filters, kernel_size=(1, 15), stride=1, padding=(0, 7), bias=False),
             nn.BatchNorm2d(temporal_filters),
             nn.ELU(),
-            # Spatial convolution over all electrodes to merge channels
-            nn.Conv2d(temporal_filters, temporal_filters, kernel_size=(num_channels, 1), bias=False),
+            # Grouped depthwise spatial convolution over electrodes (Standard EEG design)
+            nn.Conv2d(temporal_filters, temporal_filters, kernel_size=(num_channels, 1), groups=temporal_filters, bias=False),
             nn.BatchNorm2d(temporal_filters),
             nn.ELU(),
             nn.MaxPool2d(kernel_size=(1, 4))  # Downsamples sequence length

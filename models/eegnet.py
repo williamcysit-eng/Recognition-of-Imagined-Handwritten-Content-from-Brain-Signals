@@ -17,9 +17,9 @@ class EEGNet82(nn.Module):
             nn.BatchNorm2d(F1)
         )
         
-        # Spatial Convolution with full cross-filter mixing (replaces depthwise group constraint)
+        # Spatial Convolution with depthwise group constraint (Standard EEGNet design)
         self.spatial_conv = nn.Sequential(
-            nn.Conv2d(F1, F1 * D, kernel_size=(num_channels, 1), bias=False),
+            nn.Conv2d(F1, F1 * D, kernel_size=(num_channels, 1), groups=F1, bias=False),
             nn.BatchNorm2d(F1 * D),
             nn.ELU(),
             nn.MaxPool2d(kernel_size=(1, 4)),  # Max pooling to capture transient signal peaks
