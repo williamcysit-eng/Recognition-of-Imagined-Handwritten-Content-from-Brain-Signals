@@ -268,14 +268,10 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         history['val_loss'].append(epoch_val_loss)
         history['val_acc'].append(epoch_val_acc)
         
-        # Calculate validation Multi-Trial evaluation averaging accuracy (group size K=5)
-        val_mt_acc = evaluate_multi_trial_averaging(model, X_val, y_val, device, group_size=5)
-        history['val_mt_acc'].append(val_mt_acc)
-        
         # ReduceLROnPlateau scheduler step based on validation loss
         scheduler.step(epoch_val_loss)
         
-        print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{val_mt_acc:<15.2f}{epoch_time:<8.1f}")
+        print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{epoch_time:<8.1f}")
         
         # Validation loss checkpointing & Early Stopping
         if epoch_val_loss < best_val_loss:
@@ -290,8 +286,8 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             print(f"Early stopping triggered! No improvement in validation loss for {patience} consecutive epochs.")
             break
             
-    print("-" * 80)
-    print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%, Multi-Trial K=5: {history['val_mt_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
+    print("-" * 70)
+    print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
     print(f"Loading optimal model weights from Epoch {best_epoch} (prevents overfitting)...")
     
     # Reload optimal model weights
