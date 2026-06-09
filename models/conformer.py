@@ -1,6 +1,55 @@
 import torch
 import torch.nn as nn
 
+class CBAM_EEG(nn.Module):
+    """
+    Temporal-Spectral (CBAM-EEG) Attention Block.
+    Applies parallel Channel (spectral) Attention and Temporal Attention
+    to dynamically prioritize informative electrodes/features and time points.
+    """
+    def __init__(self, channels, reduction=4, temporal_kernel_size=7):
+        super(CBAM_EEG, self).__init__()
+        
+        # 1. Channel (Spectral) Attention Block
+        self.channel_avg = nn.AdaptiveAvgPool2d(1)
+        self.channel_max = nn.AdaptiveMaxPool2d(1)
+        
+        # Shared MLP for Channel Attention
+        self.mlp = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ELU(),
+            nn.Linear(channels // reduction, channels, bias=False)
+        )
+        self.sigmoid_channel = nn.Sigmoid()
+        
+        # 2. Temporal Attention Block
+        # Since height is 1, we convolve along the temporal width (dimension 3)
+        self.conv_temporal = nn.Conv2d(2, 1, kernel_size=(1, temporal_kernel_size), 
+                                       padding=(0, temporal_kernel_size // 2), bias=False)
+        self.sigmoid_temporal = nn.Sigmoid()
+        
+    def forward(self, x):
+        # Input shape: (Batch, Channels, Height=1, Time_Points)
+        
+        # --- A. Channel Attention ---
+        avg_out = self.mlp(self.channel_avg(x))
+        max_out = self.mlp(self.channel_max(x))
+        channel_weights = self.sigmoid_channel(avg_out + max_out).unsqueeze(-1).unsqueeze(-1)
+        x = x * channel_weights
+        
+        # --- B. Temporal Attention ---
+        # Pool along the channel dimension (dim=1)
+        avg_temporal = torch.mean(x, dim=1, keepdim=True)
+        max_temporal, _ = torch.max(x, dim=1, keepdim=True)
+        # Concatenate along the channel dimension to get a 2-channel spatial-temporal map
+        temporal_features = torch.cat([avg_temporal, max_temporal], dim=1)
+        temporal_weights = self.sigmoid_temporal(self.conv_temporal(temporal_features))
+        x = x * temporal_weights
+        
+        return x
+
+
 class EEGConformer(nn.Module):
     """
     Optimized EEG-Conformer Hybrid Model
@@ -20,7 +69,8 @@ class EEGConformer(nn.Module):
             nn.Conv2d(temporal_filters, temporal_filters, kernel_size=(num_channels, 1), groups=temporal_filters, bias=False),
             nn.BatchNorm2d(temporal_filters),
             nn.ELU(),
-            nn.MaxPool2d(kernel_size=(1, 4))  # Downsamples sequence length
+            nn.MaxPool2d(kernel_size=(1, 4)),  # Downsamples sequence length
+            CBAM_EEG(channels=temporal_filters, reduction=4)
         )
         
         # Robust Dynamic Shape Calculation using a dummy forward pass
