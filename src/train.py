@@ -158,7 +158,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     best_epoch = 1
     
     # Early Stopping config
-    patience = 30
+    patience = 10
     epochs_no_improve = 0
     
     history = {

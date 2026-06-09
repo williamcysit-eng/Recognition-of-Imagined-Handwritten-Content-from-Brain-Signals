@@ -50,6 +50,46 @@ class CBAM_EEG(nn.Module):
         return x
 
 
+class VisualROISpatialPrior(nn.Module):
+    """
+    Anatomical Visual ROI Spatial Prior (Visual-Occipital Attention).
+    Applies learnable attention weights over electrodes initialized with 
+    strong priors for visual-evoked potentials (occipital/parietal channels)
+    and suppresses frontal ocular noise channels.
+    """
+    def __init__(self, num_channels=24):
+        super(VisualROISpatialPrior, self).__init__()
+        # Channel names matching the dataset's order
+        channels = ['Fp1', 'Fp2', 'F3', 'F4', 'C3', 'C4', 'P3', 'P4', 'O1', 'O2', 
+                    'F7', 'F8', 'T7', 'T8', 'P7', 'P8', 'Fz', 'Cz', 'Pz', 'M1', 
+                    'M2', 'AFz', 'CPz', 'POz']
+        
+        # High priors for occipital/parietal (visual cortex), low for prefrontal (ocular noise)
+        priors = []
+        for ch in channels:
+            ch_lower = ch.lower()
+            if ch_lower in ['o1', 'o2', 'poz']:
+                priors.append(0.95)  # Occipital / visual primary cortex
+            elif ch_lower in ['p3', 'p4', 'pz', 'p7', 'p8', 'cpz']:
+                priors.append(0.80)  # Parietal / visual word form area
+            elif ch_lower in ['c3', 'c4', 'cz']:
+                priors.append(0.40)  # Central / motor cortex
+            elif ch_lower in ['f3', 'f4', 'fz', 'f7', 'f8', 't7', 't8', 'm1', 'm2']:
+                priors.append(0.20)  # Frontal & temporal background channels
+            else:
+                priors.append(0.05)  # Prefrontal / AFz / ocular blink channels
+                
+        # Convert priors to initial logit weights
+        init_logits = torch.log(torch.tensor(priors) / (1.0 - torch.tensor(priors) + 1e-5))
+        self.weights = nn.Parameter(init_logits)
+        
+    def forward(self, x):
+        # x shape: (Batch, 1, Channels, Time)
+        # Apply sigmoid to weights to scale attention between 0.0 and 1.0
+        attn = torch.sigmoid(self.weights).view(1, 1, -1, 1)
+        return x * attn
+
+
 class EEGNet82(nn.Module):
     def __init__(self, num_channels=24, num_classes=26, F1=16, D=4, F2=64, 
                  input_time_points=401, temporal_kernel_length=64, dropout_rate=0.3):
@@ -57,6 +97,9 @@ class EEGNet82(nn.Module):
         
         self.num_channels = num_channels
         self.input_time_points = input_time_points
+        
+        # Anatomical Visual ROI Spatial Prior
+        self.spatial_prior = VisualROISpatialPrior(num_channels=num_channels)
         
         # 1. Block 1: Temporal Conv -> Depthwise Spatial Conv
         self.temporal_conv = nn.Sequential(
@@ -109,6 +152,7 @@ class EEGNet82(nn.Module):
         """
         with torch.no_grad():
             dummy = torch.zeros(1, 1, self.num_channels, self.input_time_points)
+            dummy = self.spatial_prior(dummy)
             x = self.temporal_conv(dummy)
             x = self.spatial_conv(x)
             x = self.cbam(x)
@@ -117,6 +161,7 @@ class EEGNet82(nn.Module):
 
     def forward(self, x):
         # x shape: (Batch, 1, channels, time_points)
+        x = self.spatial_prior(x)
         x = self.temporal_conv(x)
         x = self.spatial_conv(x)
         x = self.cbam(x)
