@@ -44,6 +44,13 @@ if TORCH_AVAILABLE:
     torch.manual_seed(RANDOM_SEED)
 
 # -----------------------------------------------------------------------------
+# DEFAULT PIPELINE CONFIGURATIONS (Change these to easily tune default runs)
+# -----------------------------------------------------------------------------
+DEFAULT_EPOCHS = 50
+DEFAULT_MIXUP = True
+DEFAULT_MIXUP_ALPHA = 0.35
+
+# -----------------------------------------------------------------------------
 # 1. Loading and Splitting Data
 # -----------------------------------------------------------------------------
 def load_and_split_data_pipeline(npz_path, downsample_factor=5):
@@ -391,12 +398,12 @@ if __name__ == "__main__":
                         help="Model architecture to train (default: 2d_cnn)")
     parser.add_argument("--downsample", type=int, default=5,
                         help="Downsampling factor for time series (default: 5 for fast CPU execution)")
-    parser.add_argument("--epochs", type=int, default=15,
-                        help="Number of epochs to train (default: 15)")
-    parser.add_argument("--mixup", action="store_true",
-                        help="Enable Mixup data augmentation during training")
-    parser.add_argument("--mixup-alpha", type=float, default=0.2,
-                        help="Alpha parameter for Beta distribution in Mixup (default: 0.2)")
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
+                        help=f"Number of epochs to train (default: {DEFAULT_EPOCHS})")
+    parser.add_argument("--no-mixup", action="store_true", default=not DEFAULT_MIXUP,
+                        help="Disable Mixup data augmentation during training")
+    parser.add_argument("--mixup-alpha", type=float, default=DEFAULT_MIXUP_ALPHA,
+                        help=f"Alpha parameter for Beta distribution in Mixup (default: {DEFAULT_MIXUP_ALPHA})")
     args = parser.parse_args()
     
     print("==========================================================")
@@ -451,7 +458,7 @@ if __name__ == "__main__":
             batch_size=128,
             lr=0.005,
             temporal_kernel=temporal_kernel_len,
-            use_mixup=args.mixup,
+            use_mixup=not args.no_mixup,
             mixup_alpha=args.mixup_alpha
         )
         
