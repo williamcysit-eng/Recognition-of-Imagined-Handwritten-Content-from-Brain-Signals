@@ -91,10 +91,10 @@ class VisualROISpatialPrior(nn.Module):
 
 
 class EEGNet82(nn.Module):
-    def __init__(self, num_channels=24, num_classes=26, F1=16, D=4, F2=64, 
+    def __init__(self, num_channels=24, num_classes=26, F1=32, D=4, F2=64, 
                  input_time_points=401, temporal_kernel_length=64, dropout_rate=0.3):
         super(EEGNet82, self).__init__()
-        
+
         self.num_channels = num_channels
         self.input_time_points = input_time_points
         
