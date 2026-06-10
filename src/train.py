@@ -27,7 +27,6 @@ except ImportError:
     print("PyTorch is not available. Deep learning models cannot be trained.")
 
 try:
-    from sklearn.model_selection import train_test_split
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import make_pipeline

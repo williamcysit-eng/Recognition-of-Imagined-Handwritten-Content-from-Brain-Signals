@@ -183,7 +183,7 @@ def apply_max_norm_constraints(model, max_norm_spatial=1.0, max_norm_fc=0.25):
             param.data *= (desired / (norms + 1e-10))
             
         # Constrain Dense Classification layer weights (dim=1)
-        elif 'fc.1.weight' in name:
+        elif 'fc.4.weight' in name:
             norms = torch.norm(param.data, p=2, dim=1, keepdim=True)
             desired = torch.clamp(norms, max=max_norm_fc)
             param.data *= (desired / (norms + 1e-10))
