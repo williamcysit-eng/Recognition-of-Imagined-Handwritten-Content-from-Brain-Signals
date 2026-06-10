@@ -38,7 +38,7 @@ except ImportError:
     print("scikit-learn is not available. Data splitting and baselines cannot be run.")
 
 # Set random seed for reproducibility
-RANDOM_SEED = 43
+RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 if TORCH_AVAILABLE:
     torch.manual_seed(RANDOM_SEED)
@@ -48,14 +48,15 @@ if TORCH_AVAILABLE:
 # -----------------------------------------------------------------------------
 DEFAULT_EPOCHS = 50
 DEFAULT_MIXUP = True
-DEFAULT_MIXUP_ALPHA = 0.35
+DEFAULT_MIXUP_ALPHA = 0.4
 
 # -----------------------------------------------------------------------------
 # 1. Loading and Splitting Data
 # -----------------------------------------------------------------------------
 def load_and_split_data_pipeline(npz_path, downsample_factor=5):
     """
-    Loads preprocessed data and splits it into stratified Train (80%), Val (10%), and Test (10%).
+    Loads preprocessed data and splits it into stratified Train (80%), Val (10%), and Test (10%)
+    using a class-wise chronological block split (preserving physical acquisition order).
     """
     print(f"Loading preprocessed dataset from {npz_path}...")
     if not os.path.exists(npz_path):
@@ -75,15 +76,27 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=5):
     else:
         data = raw_data
         
-    # Stratified Train-Test Split (80% Train, 20% Temp)
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        data, labels, test_size=0.20, random_state=RANDOM_SEED, stratify=labels
-    )
+    print("Performing Stratified Chronological Block Split (Class-wise Time Split)...")
+    # Split each class individually chronologically (first 80% train, next 10% val, last 10% test)
+    train_idx, val_idx, test_idx = [], [], []
     
-    # Stratified Val-Test Split from Temp (50% Val, 50% Test of the 20% -> 10% and 10%)
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.50, random_state=RANDOM_SEED, stratify=y_temp
-    )
+    for label in np.unique(labels):
+        indices = np.where(labels == label)[0]  # Chronological indices for this class
+        n_samples = len(indices)
+        n_train = int(0.80 * n_samples)
+        n_val = int(0.10 * n_samples)
+        
+        train_idx.extend(indices[:n_train])
+        val_idx.extend(indices[n_train:n_train + n_val])
+        test_idx.extend(indices[n_train + n_val:])
+        
+    train_idx = np.array(train_idx)
+    val_idx = np.array(val_idx)
+    test_idx = np.array(test_idx)
+    
+    X_train, y_train = data[train_idx], labels[train_idx]
+    X_val, y_val = data[val_idx], labels[val_idx]
+    X_test, y_test = data[test_idx], labels[test_idx]
     
     print("\n" + "="*50)
     print("               DATASET SPLIT DETAILS              ")
