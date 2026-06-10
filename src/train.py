@@ -99,8 +99,7 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=5):
 def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val, 
                               channels_count, time_points_count, num_epochs=15, 
                               batch_size=128, lr=0.005, temporal_kernel=64,
-                              use_mixup=False, mixup_alpha=0.2,
-                              use_cutmix=False, cutmix_alpha=0.5):
+                              use_mixup=False, mixup_alpha=0.2):
     """
     Trains either the 2D CNN or the fully-fledged EEGNet model, enforcing 
     checkpoint saving based on the highest validation accuracy.
@@ -109,8 +108,6 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     print(f"\nInitializing {model_type.upper()} on device: {device}")
     if use_mixup:
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
-    if use_cutmix:
-        print(f"Applying CutMix Augmentation (alpha={cutmix_alpha}) during training...")
     
     if model_type == "2d_cnn":
         model = LightEEG2DCNN(num_classes=26).to(device)
@@ -197,28 +194,6 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
                 
                 _, predicted = outputs.max(1)
                 correct_train += lam * predicted.eq(batch_y).sum().item() + (1 - lam) * predicted.eq(batch_y[index]).sum().item()
-            elif use_cutmix and cutmix_alpha > 0:
-                lam = np.random.beta(cutmix_alpha, cutmix_alpha)
-                batch_size_curr = batch_x.size(0)
-                index = torch.randperm(batch_size_curr, device=device)
-                
-                T = batch_x.size(3)
-                block_len = int(np.round(T * (1.0 - lam)))
-                block_len = max(1, min(T - 1, block_len))
-                
-                t_start = np.random.randint(0, T - block_len)
-                t_end = t_start + block_len
-                
-                mixed_x = batch_x.clone()
-                mixed_x[:, :, :, t_start:t_end] = batch_x[index, :, :, t_start:t_end]
-                
-                lam_actual = 1.0 - (block_len / T)
-                outputs = model(mixed_x)
-                
-                loss = lam_actual * criterion(outputs, batch_y) + (1.0 - lam_actual) * criterion(outputs, batch_y[index])
-                
-                _, predicted = outputs.max(1)
-                correct_train += lam_actual * predicted.eq(batch_y).sum().item() + (1.0 - lam_actual) * predicted.eq(batch_y[index]).sum().item()
             else:
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
@@ -422,10 +397,6 @@ if __name__ == "__main__":
                         help="Enable Mixup data augmentation during training")
     parser.add_argument("--mixup-alpha", type=float, default=0.2,
                         help="Alpha parameter for Beta distribution in Mixup (default: 0.2)")
-    parser.add_argument("--cutmix", action="store_true",
-                        help="Enable CutMix data augmentation during training")
-    parser.add_argument("--cutmix-alpha", type=float, default=0.5,
-                        help="Alpha parameter for Beta distribution in CutMix (default: 0.5)")
     args = parser.parse_args()
     
     print("==========================================================")
@@ -481,9 +452,7 @@ if __name__ == "__main__":
             lr=0.005,
             temporal_kernel=temporal_kernel_len,
             use_mixup=args.mixup,
-            mixup_alpha=args.mixup_alpha,
-            use_cutmix=args.cutmix,
-            cutmix_alpha=args.cutmix_alpha
+            mixup_alpha=args.mixup_alpha
         )
         
         # Plot curves
