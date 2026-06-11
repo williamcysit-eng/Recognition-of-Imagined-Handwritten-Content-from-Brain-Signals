@@ -36,17 +36,19 @@ except ImportError:
     print("scikit-learn is not available. Data splitting and baselines cannot be run.")
 
 # Set random seed for reproducibility
-RANDOM_SEED = 42
+RANDOM_SEED = 123
 np.random.seed(RANDOM_SEED)
 if TORCH_AVAILABLE:
     torch.manual_seed(RANDOM_SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 # -----------------------------------------------------------------------------
 # DEFAULT PIPELINE CONFIGURATIONS (Change these to easily tune default runs)
 # -----------------------------------------------------------------------------
 DEFAULT_EPOCHS = 50
 DEFAULT_MIXUP = True
-DEFAULT_MIXUP_ALPHA = 0.4
+DEFAULT_MIXUP_ALPHA = 0.2
 
 # -----------------------------------------------------------------------------
 # 1. Loading and Splitting Data
@@ -106,7 +108,7 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=5):
 # -----------------------------------------------------------------------------
 def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val, 
                               channels_count, time_points_count, num_epochs=15, 
-                              batch_size=128, lr=0.005, temporal_kernel=64,
+                              batch_size=64, lr=0.005, temporal_kernel=64,
                               use_mixup=False, mixup_alpha=0.2):
     """
     Trains either the 2D CNN or the fully-fledged EEGNet model, enforcing 
@@ -400,7 +402,7 @@ if __name__ == "__main__":
             channels_count=channels_count,
             time_points_count=time_points_count,
             num_epochs=args.epochs,
-            batch_size=128,
+            batch_size=64,
             lr=0.005,
             temporal_kernel=temporal_kernel_len,
             use_mixup=not args.no_mixup,

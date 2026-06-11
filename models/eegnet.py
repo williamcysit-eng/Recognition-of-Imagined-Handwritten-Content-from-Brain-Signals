@@ -130,7 +130,7 @@ class EEGNet82(nn.Module):
             nn.Conv2d(F1 * D, F2, kernel_size=(1, 1), bias=False),
             nn.BatchNorm2d(F2),
             nn.ELU(),
-            nn.AdaptiveAvgPool2d((1, 8)),  # Adaptive pooling for robust spatiotemporal representation
+            nn.AdaptiveAvgPool2d((1, 16)),  # Retain more temporal bins for classification
             nn.Dropout(dropout_rate)
         )
         
