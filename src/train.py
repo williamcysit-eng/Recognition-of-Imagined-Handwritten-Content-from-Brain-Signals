@@ -36,7 +36,7 @@ except ImportError:
     print("scikit-learn is not available. Data splitting and baselines cannot be run.")
 
 # Set random seed for reproducibility
-RANDOM_SEED = 123
+RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 if TORCH_AVAILABLE:
     torch.manual_seed(RANDOM_SEED)
@@ -181,6 +181,9 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         
         for batch_x, batch_y in train_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            
+            # Gaussian noise augmentation for EEG signals
+            batch_x = batch_x + torch.randn_like(batch_x) * 0.07
             
             optimizer.zero_grad()
             
