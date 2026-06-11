@@ -46,14 +46,14 @@ if TORCH_AVAILABLE:
 # -----------------------------------------------------------------------------
 # DEFAULT PIPELINE CONFIGURATIONS (Change these to easily tune default runs)
 # -----------------------------------------------------------------------------
-DEFAULT_EPOCHS = 50
+DEFAULT_EPOCHS = 150
 DEFAULT_MIXUP = True
 DEFAULT_MIXUP_ALPHA = 0.2
 
 # -----------------------------------------------------------------------------
 # 1. Loading and Splitting Data
 # -----------------------------------------------------------------------------
-def load_and_split_data_pipeline(npz_path, downsample_factor=5):
+def load_and_split_data_pipeline(npz_path, downsample_factor=2):
     """
     Loads preprocessed data and splits it into stratified Train (80%), Val (10%), and Test (10%)
     using a class-wise chronological block split (preserving physical acquisition order).
@@ -120,11 +120,12 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
     
     if model_type == "deep_conv_net":
+        dcn_kernel = 15  # 120ms at 125Hz
         model = DeepConvNet(
             num_channels=channels_count,
             num_classes=26,
             input_time_points=time_points_count,
-            temporal_kernel=temporal_kernel,
+            temporal_kernel=dcn_kernel,
             dropout_rate=0.5
         ).to(device)
         best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_deep_conv_net.pth")
@@ -157,7 +158,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.0 if model_type == "deep_conv_net" else 0.1)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
@@ -171,7 +172,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     best_epoch = 1
     
     # Early Stopping config
-    patience = 10
+    patience = 40
     epochs_no_improve = 0
     
     history = {
@@ -284,11 +285,12 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     
     # Reload optimal model weights
     if model_type == "deep_conv_net":
+        dcn_kernel = 15
         best_model = DeepConvNet(
             num_channels=channels_count,
             num_classes=26,
             input_time_points=time_points_count,
-            temporal_kernel=temporal_kernel,
+            temporal_kernel=dcn_kernel,
             dropout_rate=0.5
         ).to(device)
     elif model_type == "eegnet":
@@ -377,8 +379,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
     parser.add_argument("--model", type=str, choices=["deep_conv_net", "eegnet", "eeg_inception", "all"], default="deep_conv_net",
                         help="Model architecture to train (default: deep_conv_net)")
-    parser.add_argument("--downsample", type=int, default=5,
-                        help="Downsampling factor for time series (default: 5 for fast CPU execution)")
+    parser.add_argument("--downsample", type=int, default=2,
+                        help="Downsampling factor for time series (default: 2)")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
                         help=f"Number of epochs to train (default: {DEFAULT_EPOCHS})")
     parser.add_argument("--no-mixup", action="store_true", default=not DEFAULT_MIXUP,
