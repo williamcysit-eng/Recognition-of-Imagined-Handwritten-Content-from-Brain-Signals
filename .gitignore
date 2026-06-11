@@ -1,3 +1,7 @@
 eeg_dataset.npz
 data_EEG_AI.mat
 *.mat
+*.pth
+*.pyc
+__pycache__/
+outputs/

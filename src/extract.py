@@ -1,7 +1,6 @@
 import os
 import scipy.io as sio
 import numpy as np
-import matplotlib.pyplot as plt
 
 # Try to import torch and scikit-learn to make sure they are documented and available
 try:
@@ -100,98 +99,6 @@ def get_alphabet_letter(label_1indexed):
     return chr(ord('A') + label_1indexed - 1)
 
 
-def generate_visualizations(data, labels_1indexed, channels, time_points, figures_dir):
-    """
-    Plots and saves:
-    1. Single trial EEG heatmap (channels x time points) for alphabet 'A'.
-    2. Single trial EEG line plot (channels' voltage lines over time) for alphabet 'A'.
-    3. Average EEG heatmap for alphabet 'A' across all its 300 trials.
-    4. Average EEG line plot for alphabet 'A' across all its 300 trials.
-    """
-    print("\nGenerating data visualization plots to match the instructions' Figure 3...")
-    os.makedirs(figures_dir, exist_ok=True)
-    
-    # Index of trials corresponding to Alphabet 'A' (label = 1)
-    indices_a = np.where(labels_1indexed == 1)[0]
-    
-    # 1. Single trial data (e.g., the very first trial of alphabet 'A')
-    single_trial_idx = indices_a[0]
-    single_trial_data = data[single_trial_idx]  # Shape: (24, 801)
-    
-    # 2. Average pattern of all trials of alphabet 'A'
-    average_data_a = np.mean(data[indices_a], axis=0)  # Shape: (24, 801)
-    
-    # Set up matplotlib style
-    plt.rcParams.update({'font.size': 10, 'figure.titlesize': 14})
-    
-    # Y-ticks helpers
-    y_ticks_idx = np.arange(len(channels))
-    
-    # PLOT 1: Single Trial Heatmap (Channels x Time)
-    plt.figure(figsize=(12, 6))
-    plt.imshow(single_trial_data, aspect='auto', cmap='RdBu_r', 
-               extent=[time_points[0], time_points[-1], len(channels)-0.5, -0.5])
-    plt.colorbar(label='Voltage / Amplitude (μV)')
-    plt.yticks(y_ticks_idx, reversed(channels))
-    plt.gca().invert_yaxis()  # Standard electrode ordering Fp1 at the top
-    plt.xlabel('Time (ms)')
-    plt.ylabel('EEG Channels')
-    plt.title("Figure 3(a): Single Trial EEG Heatmap (Alphabet 'A')")
-    plt.axvline(x=0, color='black', linestyle='--', alpha=0.6, label='Stimulus Onset')
-    plt.tight_layout()
-    plt.savefig(os.path.join(figures_dir, 'single_trial_heatmap_A.png'), dpi=150)
-    plt.close()
-    print("  - Saved 'single_trial_heatmap_A.png'")
-    
-    # PLOT 2: Single Trial Line Plot (All Channels)
-    plt.figure(figsize=(12, 6))
-    offset = np.max(np.abs(single_trial_data)) * 0.8  # vertical offset for visibility
-    for i, chan_name in enumerate(channels):
-        plt.plot(time_points, single_trial_data[i] - i * offset, label=chan_name if i < 10 else "", alpha=0.8)
-    plt.xlabel('Time (ms)')
-    plt.ylabel('EEG Channels with offset')
-    plt.yticks(-np.arange(len(channels)) * offset, channels)
-    plt.title("Figure 3(b): Single Trial EEG Waveforms (Alphabet 'A')")
-    plt.axvline(x=0, color='black', linestyle='--', alpha=0.6)
-    plt.xlim(time_points[0], time_points[-1])
-    plt.tight_layout()
-    plt.savefig(os.path.join(figures_dir, 'single_trial_lineplot_A.png'), dpi=150)
-    plt.close()
-    print("  - Saved 'single_trial_lineplot_A.png'")
-
-    # PLOT 3: Averaged Heatmap (Channels x Time)
-    plt.figure(figsize=(12, 6))
-    plt.imshow(average_data_a, aspect='auto', cmap='RdBu_r', 
-               extent=[time_points[0], time_points[-1], len(channels)-0.5, -0.5])
-    plt.colorbar(label='Voltage / Amplitude (μV)')
-    plt.yticks(y_ticks_idx, reversed(channels))
-    plt.gca().invert_yaxis()
-    plt.xlabel('Time (ms)')
-    plt.ylabel('EEG Channels')
-    plt.title(f"Figure 3(c): Averaged EEG Heatmap across {len(indices_a)} trials (Alphabet 'A')")
-    plt.axvline(x=0, color='black', linestyle='--', alpha=0.6, label='Stimulus Onset')
-    plt.tight_layout()
-    plt.savefig(os.path.join(figures_dir, 'average_heatmap_A.png'), dpi=150)
-    plt.close()
-    print("  - Saved 'average_heatmap_A.png'")
-    
-    # PLOT 4: Averaged Line Plot (All Channels)
-    plt.figure(figsize=(12, 6))
-    offset_avg = np.max(np.abs(average_data_a)) * 0.8
-    for i, chan_name in enumerate(channels):
-        plt.plot(time_points, average_data_a[i] - i * offset_avg, label=chan_name if i < 10 else "", alpha=0.8)
-    plt.xlabel('Time (ms)')
-    plt.ylabel('EEG Channels with offset')
-    plt.yticks(-np.arange(len(channels)) * offset_avg, channels)
-    plt.title(f"Figure 3(d): Averaged EEG Waveforms across {len(indices_a)} trials (Alphabet 'A')")
-    plt.axvline(x=0, color='black', linestyle='--', alpha=0.6)
-    plt.xlim(time_points[0], time_points[-1])
-    plt.tight_layout()
-    plt.savefig(os.path.join(figures_dir, 'average_lineplot_A.png'), dpi=150)
-    plt.close()
-    print("  - Saved 'average_lineplot_A.png'")
-
-
 # -----------------------------------------------------------------------------
 # PyTorch Dataset Definition
 # -----------------------------------------------------------------------------
@@ -232,22 +139,16 @@ if __name__ == "__main__":
     # Standard structured paths
     mat_path = os.path.join(ROOT_DIR, "data", "raw", "data_EEG_AI.mat")
     npz_path = os.path.join(ROOT_DIR, "data", "processed", "eeg_dataset.npz")
-    figures_dir = os.path.join(ROOT_DIR, "outputs", "figures")
-    
-    print("==========================================================")
-    print("         EEG Handwriting Imagery Extraction Pipeline      ")
-    print("==========================================================\n")
-    
+
+
     # 1. Run extractor
     data, labels_1indexed, labels_0indexed, channels, time_points = load_and_preprocess_eeg_data(mat_path)
     
     # 2. Save NumPy Archive
     save_as_numpy_archive(npz_path, data, labels_1indexed, labels_0indexed, channels, time_points)
     
-    # 3. Generate visualization plots (recreates Figure 3 described in the instructions)
-    generate_visualizations(data, labels_1indexed, channels, time_points, figures_dir)
-    
-    # 4. Demonstrate Stratified Train-Test Split if scikit-learn is available
+
+    # 3. Demonstrate Stratified Train-Test Split if scikit-learn is available
     if SKLEARN_AVAILABLE:
         print("\nDemonstrating Stratified Train-Test Split (80% Train, 20% Test) using scikit-learn...")
         X_train, X_test, y_train, y_test = train_test_split(
@@ -280,5 +181,4 @@ if __name__ == "__main__":
             print(f"  - PyTorch DataLoader batch label shape: {batch_y.shape}")
             print("  - Ready for CNN model training!")
             
-    print("\nExtraction and pre-processing completed successfully!")
-    print("==========================================================")
+

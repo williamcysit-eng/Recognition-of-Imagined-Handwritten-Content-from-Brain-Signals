@@ -3,7 +3,6 @@ import sys
 import time
 import argparse
 import numpy as np
-import matplotlib.pyplot as plt
 
 # Dynamic import configuration: Add root directory to python path
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -97,17 +96,7 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=5):
     X_val, y_val = data[val_idx], labels[val_idx]
     X_test, y_test = data[test_idx], labels[test_idx]
     
-    print("\n" + "="*50)
-    print("               DATASET SPLIT DETAILS              ")
-    print("="*50)
-    print(f"Total dataset size:      {data.shape[0]} samples")
-    print(f"Train split size:        {X_train.shape[0]} samples ({X_train.shape[0]/data.shape[0]*100:.1f}%)")
-    print(f"Validation split size:   {X_val.shape[0]} samples ({X_val.shape[0]/data.shape[0]*100:.1f}%)")
-    print(f"Test split size:         {X_test.shape[0]} samples ({X_test.shape[0]/data.shape[0]*100:.1f}%)")
-    print(f"EEG Signal Input Shape:  {X_train.shape[1:]} (Channels: {X_train.shape[1]}, Time Points: {X_train.shape[2]})")
-    print(f"Number of classes:       {len(np.unique(labels))} (A to Z)")
-    print(f"Class Balance (Train):   Each class has exactly {np.sum(y_train == 0)} samples (perfectly balanced)")
-    print("="*50 + "\n")
+
     
     return X_train, y_train, X_val, y_val, X_test, y_test, channels, time_points
 
@@ -306,7 +295,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
 
 
 # -----------------------------------------------------------------------------
-# 3. Model Testing and Metrics Plotting
+# 3. Model Testing
 # -----------------------------------------------------------------------------
 def evaluate_model_on_test_set(model_type, model, X_test, y_test, device):
     """
@@ -335,41 +324,6 @@ def evaluate_model_on_test_set(model_type, model, X_test, y_test, device):
     return test_acc
 
 
-def plot_metrics_history(model_type, history):
-    """
-    Generates and saves the loss and accuracy metrics plots.
-    """
-    epochs = range(1, len(history['train_loss']) + 1)
-    
-    plt.figure(figsize=(12, 5))
-    
-    # Loss curves
-    plt.subplot(1, 2, 1)
-    plt.plot(epochs, history['train_loss'], 'b-o', label='Training Loss')
-    plt.plot(epochs, history['val_loss'], 'r-s', label='Validation Loss')
-    plt.title(f'{model_type.upper()} Training and Validation Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # Accuracy curves
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs, history['train_acc'], 'b-o', label='Training Accuracy')
-    plt.plot(epochs, history['val_acc'], 'r-s', label='Validation Accuracy')
-    plt.title(f'{model_type.upper()} Training and Validation Accuracy')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy (%)')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plot_path = os.path.join(ROOT_DIR, "outputs", "figures", f"training_curves_{model_type}.png")
-    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
-    plt.savefig(plot_path, dpi=150)
-    plt.close()
-    print(f"Saved {model_type.upper()} training curves plot as: {plot_path}")
-
 
 # -----------------------------------------------------------------------------
 # 4. Baseline Machine Learning Classifier
@@ -378,7 +332,7 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
     """
     Trains a Logistic Regression baseline model on flattened features using scikit-learn.
     """
-    print("\nTraining Logistic Regression baseline using scikit-learn...")
+
     t0 = time.time()
     
     # Flatten spatio-temporal matrices (channels * time points)
@@ -395,9 +349,7 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
     train_acc = accuracy_score(y_train, baseline_model.predict(X_train_flat)) * 100
     test_acc = accuracy_score(y_test, baseline_model.predict(X_test_flat)) * 100
     
-    print(f"Baseline completed in {time.time() - t0:.1f}s")
-    print(f"Baseline Train Accuracy: {train_acc:.2f}%")
-    print(f"Baseline Test Accuracy:  {test_acc:.2f}%")
+
     return test_acc
 
 
@@ -418,9 +370,7 @@ if __name__ == "__main__":
                         help=f"Alpha parameter for Beta distribution in Mixup (default: {DEFAULT_MIXUP_ALPHA})")
     args = parser.parse_args()
     
-    print("==========================================================")
-    print("     UNIFIED EEG IMAGERY ML/DL CLASSIFICATION PIPELINE    ")
-    print("==========================================================\n")
+
     
     if not TORCH_AVAILABLE or not SKLEARN_AVAILABLE:
         print("Missing required libraries. Please run 'pip install scikit-learn torch numpy scipy matplotlib'")
@@ -474,9 +424,6 @@ if __name__ == "__main__":
             mixup_alpha=args.mixup_alpha
         )
         
-        # Plot curves
-        plot_metrics_history(model_type, history)
-        
         # Evaluate on test set
         test_acc = evaluate_model_on_test_set(model_type, model, X_test, y_test, device)
         results[model_type] = test_acc
@@ -486,9 +433,6 @@ if __name__ == "__main__":
     results["logistic_regression"] = baseline_test_acc
     
     # Print Final Comparison
-    print("\n" + "="*50)
-    print("                  FINAL COMPARISON RESULTS                ")
-    print("="*50)
+    print("\nFINAL COMPARISON RESULTS")
     for model_name, acc in results.items():
         print(f"  * {model_name.upper():<25} Test Accuracy: {acc:.2f}%")
-    print("="*50 + "\n")
