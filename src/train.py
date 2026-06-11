@@ -11,7 +11,7 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 # Import models and custom dataset
-from models import LightEEG2DCNN, EEGNet82, apply_max_norm_constraints
+from models import EEGNet82, apply_max_norm_constraints, DeepConvNet, EEGInception
 from src.extract import EEGDataset
 
 # Try to import PyTorch and scikit-learn
@@ -119,9 +119,15 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     if use_mixup:
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
     
-    if model_type == "2d_cnn":
-        model = LightEEG2DCNN(num_classes=26).to(device)
-        best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_eeg_2d_cnn.pth")
+    if model_type == "deep_conv_net":
+        model = DeepConvNet(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            temporal_kernel=temporal_kernel,
+            dropout_rate=0.5
+        ).to(device)
+        best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_deep_conv_net.pth")
     elif model_type == "eegnet":
         model = EEGNet82(
             num_channels=channels_count,
@@ -131,6 +137,14 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             dropout_rate=0.3
         ).to(device)
         best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_eegnet.pth")
+    elif model_type == "eeg_inception":
+        model = EEGInception(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            dropout_rate=0.5
+        ).to(device)
+        best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_eeg_inception.pth")
     else:
         raise ValueError(f"Unknown model type: {model_type}")
         
@@ -144,7 +158,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.02 if model_type == "2d_cnn" else 0.05)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         mode='min',  # Monitor validation loss (minimize)
@@ -269,8 +283,14 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     print(f"Loading optimal model weights from Epoch {best_epoch} (prevents overfitting)...")
     
     # Reload optimal model weights
-    if model_type == "2d_cnn":
-        best_model = LightEEG2DCNN(num_classes=26).to(device)
+    if model_type == "deep_conv_net":
+        best_model = DeepConvNet(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            temporal_kernel=temporal_kernel,
+            dropout_rate=0.5
+        ).to(device)
     elif model_type == "eegnet":
         best_model = EEGNet82(
             num_channels=channels_count,
@@ -278,6 +298,13 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             input_time_points=time_points_count,
             temporal_kernel_length=temporal_kernel,
             dropout_rate=0.3
+        ).to(device)
+    elif model_type == "eeg_inception":
+        best_model = EEGInception(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            dropout_rate=0.5
         ).to(device)
         
     best_model.load_state_dict(torch.load(best_model_path, map_location=device))
@@ -348,8 +375,8 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
-    parser.add_argument("--model", type=str, choices=["2d_cnn", "eegnet", "both"], default="2d_cnn",
-                        help="Model architecture to train (default: 2d_cnn)")
+    parser.add_argument("--model", type=str, choices=["deep_conv_net", "eegnet", "eeg_inception", "all"], default="deep_conv_net",
+                        help="Model architecture to train (default: deep_conv_net)")
     parser.add_argument("--downsample", type=int, default=5,
                         help="Downsampling factor for time series (default: 5 for fast CPU execution)")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
@@ -388,10 +415,12 @@ if __name__ == "__main__":
     
     # Determine models to run
     models_to_train = []
-    if args.model == "2d_cnn" or args.model == "both":
-        models_to_train.append("2d_cnn")
-    if args.model == "eegnet" or args.model == "both":
+    if args.model == "deep_conv_net" or args.model == "all":
+        models_to_train.append("deep_conv_net")
+    if args.model == "eegnet" or args.model == "all":
         models_to_train.append("eegnet")
+    if args.model == "eeg_inception" or args.model == "all":
+        models_to_train.append("eeg_inception")
         
     # Run Deep Learning models
     for model_type in models_to_train:
