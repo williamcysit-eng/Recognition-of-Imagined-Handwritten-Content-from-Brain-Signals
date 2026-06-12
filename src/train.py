@@ -53,7 +53,7 @@ DEFAULT_MIXUP_ALPHA = 0.2
 # -----------------------------------------------------------------------------
 # 1. Loading and Splitting Data
 # -----------------------------------------------------------------------------
-def load_and_split_data_pipeline(npz_path, downsample_factor=2):
+def load_and_split_data_pipeline(npz_path, downsample_factor=1):
     """
     Loads preprocessed data and splits it into stratified Train (80%), Val (10%), and Test (10%)
     using a class-wise chronological block split (preserving physical acquisition order).
@@ -109,7 +109,7 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=2):
 def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val, 
                               channels_count, time_points_count, num_epochs=15, 
                               batch_size=64, lr=0.005, temporal_kernel=64,
-                              use_mixup=False, mixup_alpha=0.2):
+                              use_mixup=False, mixup_alpha=0.2, noise_std=0.0):
     """
     Trains either the 2D CNN or the fully-fledged EEGNet model, enforcing 
     checkpoint saving based on the highest validation accuracy.
@@ -120,7 +120,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
     
     if model_type == "deep_conv_net":
-        dcn_kernel = 15  # 120ms at 125Hz
+        dcn_kernel = 15  # 60ms at 250Hz
         model = DeepConvNet(
             num_channels=channels_count,
             num_classes=26,
@@ -143,7 +143,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             num_channels=channels_count,
             num_classes=26,
             input_time_points=time_points_count,
-            dropout_rate=0.5
+            dropout_rate=0.3
         ).to(device)
         best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_eeg_inception.pth")
     else:
@@ -198,7 +198,8 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             
             # Gaussian noise augmentation for EEG signals
-            batch_x = batch_x + torch.randn_like(batch_x) * 0.07
+            if noise_std > 0:
+                batch_x = batch_x + torch.randn_like(batch_x) * noise_std
             
             optimizer.zero_grad()
             
@@ -306,7 +307,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             num_channels=channels_count,
             num_classes=26,
             input_time_points=time_points_count,
-            dropout_rate=0.5
+            dropout_rate=0.3
         ).to(device)
         
     best_model.load_state_dict(torch.load(best_model_path, map_location=device))
@@ -379,12 +380,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
     parser.add_argument("--model", type=str, choices=["deep_conv_net", "eegnet", "eeg_inception", "all"], default="deep_conv_net",
                         help="Model architecture to train (default: deep_conv_net)")
-    parser.add_argument("--downsample", type=int, default=2,
+    parser.add_argument("--downsample", type=int, default=1,
                         help="Downsampling factor for time series (default: 2)")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
                         help=f"Number of epochs to train (default: {DEFAULT_EPOCHS})")
     parser.add_argument("--no-mixup", action="store_true", default=not DEFAULT_MIXUP,
                         help="Disable Mixup data augmentation during training")
+    parser.add_argument("--noise-std", type=float, default=0.0,
+                        help="Standard deviation of Gaussian noise augmentation (default: 0.0 = off)")
     parser.add_argument("--mixup-alpha", type=float, default=DEFAULT_MIXUP_ALPHA,
                         help=f"Alpha parameter for Beta distribution in Mixup (default: {DEFAULT_MIXUP_ALPHA})")
     args = parser.parse_args()
@@ -440,7 +443,8 @@ if __name__ == "__main__":
             lr=0.005,
             temporal_kernel=temporal_kernel_len,
             use_mixup=not args.no_mixup,
-            mixup_alpha=args.mixup_alpha
+            mixup_alpha=args.mixup_alpha,
+            noise_std=args.noise_std
         )
         
         # Evaluate on test set
