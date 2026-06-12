@@ -98,8 +98,6 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=1):
     X_val, y_val = data[val_idx], labels[val_idx]
     X_test, y_test = data[test_idx], labels[test_idx]
     
-
-    
     return X_train, y_train, X_val, y_val, X_test, y_test, channels, time_points
 
 
@@ -111,8 +109,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
                               batch_size=64, lr=0.005, temporal_kernel=64,
                               use_mixup=False, mixup_alpha=0.2, noise_std=0.0):
     """
-    Trains either the 2D CNN or the fully-fledged EEGNet model, enforcing 
-    checkpoint saving based on the highest validation accuracy.
+    Trains a deep learning model with validation-based checkpointing.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\nInitializing {model_type.upper()} on device: {device}")
@@ -159,7 +156,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     criterion = nn.CrossEntropyLoss(label_smoothing=0.0 if model_type == "deep_conv_net" else 0.1)
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.08 if model_type == "eeg_inception" else 0.05)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         mode='min',  # Monitor validation loss (minimize)
@@ -349,13 +346,6 @@ def evaluate_model_on_test_set(model_type, model, X_test, y_test, device):
 # 4. Baseline Machine Learning Classifier
 # -----------------------------------------------------------------------------
 def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
-    """
-    Trains a Logistic Regression baseline model on flattened features using scikit-learn.
-    """
-
-    t0 = time.time()
-    
-    # Flatten spatio-temporal matrices (channels * time points)
     X_train_flat = X_train.reshape(X_train.shape[0], -1)
     X_test_flat = X_test.reshape(X_test.shape[0], -1)
     
@@ -365,23 +355,18 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
         LogisticRegression(max_iter=400, C=0.05, random_state=RANDOM_SEED)
     )
     baseline_model.fit(X_train_flat, y_train)
-    
-    train_acc = accuracy_score(y_train, baseline_model.predict(X_train_flat)) * 100
     test_acc = accuracy_score(y_test, baseline_model.predict(X_test_flat)) * 100
-    
-
     return test_acc
 
 
-# -----------------------------------------------------------------------------
-# 5. Pipeline Orchestrator Entrypoint
+# 4. Pipeline Orchestrator Entrypoint
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
     parser.add_argument("--model", type=str, choices=["deep_conv_net", "eegnet", "eeg_inception", "all"], default="deep_conv_net",
                         help="Model architecture to train (default: deep_conv_net)")
     parser.add_argument("--downsample", type=int, default=1,
-                        help="Downsampling factor for time series (default: 2)")
+                        help="Downsampling factor for time series (default: 1)")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
                         help=f"Number of epochs to train (default: {DEFAULT_EPOCHS})")
     parser.add_argument("--no-mixup", action="store_true", default=not DEFAULT_MIXUP,
@@ -391,8 +376,6 @@ if __name__ == "__main__":
     parser.add_argument("--mixup-alpha", type=float, default=DEFAULT_MIXUP_ALPHA,
                         help=f"Alpha parameter for Beta distribution in Mixup (default: {DEFAULT_MIXUP_ALPHA})")
     args = parser.parse_args()
-    
-
     
     if not TORCH_AVAILABLE or not SKLEARN_AVAILABLE:
         print("Missing required libraries. Please run 'pip install scikit-learn torch numpy scipy matplotlib'")
@@ -444,7 +427,7 @@ if __name__ == "__main__":
             temporal_kernel=temporal_kernel_len,
             use_mixup=not args.no_mixup,
             mixup_alpha=args.mixup_alpha,
-            noise_std=args.noise_std
+            noise_std=args.noise_std,
         )
         
         # Evaluate on test set
