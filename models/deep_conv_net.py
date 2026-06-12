@@ -5,6 +5,7 @@ import torch.nn as nn
 class DeepConvNet(nn.Module):
     """
     DeepConvNet adapted for handwriting imagery EEG classification.
+    3 sequential conv blocks with BatchNorm, ELU, MaxPool, and Dropout.
     """
     def __init__(self, num_channels=24, num_classes=26, input_time_points=401,
                  F1=20, F2=40, F3=80, temporal_kernel=5, dropout_rate=0.5):
@@ -15,7 +16,6 @@ class DeepConvNet(nn.Module):
                       padding=(0, temporal_kernel // 2), bias=False),
             nn.BatchNorm2d(F1),
         )
-        # Standard spatial: integrate across all channels
         self.spatial_conv = nn.Sequential(
             nn.Conv2d(F1, F1, kernel_size=(num_channels, 1), bias=False),
             nn.BatchNorm2d(F1),

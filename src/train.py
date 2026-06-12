@@ -36,7 +36,7 @@ except ImportError:
     print("scikit-learn is not available. Data splitting and baselines cannot be run.")
 
 # Set random seed for reproducibility
-RANDOM_SEED = 42
+RANDOM_SEED = 41
 np.random.seed(RANDOM_SEED)
 if TORCH_AVAILABLE:
     torch.manual_seed(RANDOM_SEED)
@@ -315,29 +315,40 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
 # 3. Model Testing
 # -----------------------------------------------------------------------------
 def evaluate_model_on_test_set(model_type, model, X_test, y_test, device):
-    """
-    Evaluates the loaded model on the test dataset.
-    Computes single-trial accuracy.
-    """
     test_dataset = EEGDataset(X_test, y_test)
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
-    
     model.eval()
-    correct = 0
-    total = 0
-    
+    correct, total = 0, 0
     with torch.no_grad():
-        for batch_x, batch_y in test_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            outputs = model(batch_x)
+        for bx, by in test_loader:
+            bx, by = bx.to(device), by.to(device)
+            outputs = model(bx)
             _, predicted = outputs.max(1)
-            correct += predicted.eq(batch_y).sum().item()
-            total += batch_y.size(0)
-            
+            correct += predicted.eq(by).sum().item()
+            total += by.size(0)
     test_acc = (correct / total) * 100
     print(f"\n--- {model_type.upper()} EVALUATION METRICS ---")
     print(f"  * Single-Trial Held-Out Test Accuracy: {test_acc:.2f}%")
-        
+    return test_acc
+
+def evaluate_ensemble(model_a, model_b, X_test, y_test, device, name_a="DCN", name_b="EEGNet"):
+    test_dataset = EEGDataset(X_test, y_test)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    model_a.eval()
+    model_b.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for bx, by in test_loader:
+            bx, by = bx.to(device), by.to(device)
+            out_a = model_a(bx)
+            out_b = model_b(bx)
+            outputs = (out_a + out_b) / 2.0
+            _, predicted = outputs.max(1)
+            correct += predicted.eq(by).sum().item()
+            total += by.size(0)
+    test_acc = (correct / total) * 100
+    print(f"\n--- ENSEMBLE ({name_a} + {name_b}) EVALUATION ---")
+    print(f"  * Single-Trial Held-Out Test Accuracy: {test_acc:.2f}%")
     return test_acc
 
 
@@ -363,7 +374,7 @@ def run_logistic_regression_baseline(X_train, y_train, X_test, y_test):
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified EEG Handwriting Imagery Classification Pipeline")
-    parser.add_argument("--model", type=str, choices=["deep_conv_net", "eegnet", "eeg_inception", "all"], default="deep_conv_net",
+    parser.add_argument("--model", type=str, choices=["deep_conv_net", "eegnet", "eeg_inception", "ensemble", "all"], default="deep_conv_net",
                         help="Model architecture to train (default: deep_conv_net)")
     parser.add_argument("--downsample", type=int, default=1,
                         help="Downsampling factor for time series (default: 1)")
@@ -412,27 +423,45 @@ if __name__ == "__main__":
         
     # Run Deep Learning models
     for model_type in models_to_train:
-        # Train
         model, history, device = train_deep_learning_model(
             model_type=model_type,
-            X_train=X_train,
-            y_train=y_train,
-            X_val=X_val,
-            y_val=y_val,
-            channels_count=channels_count,
-            time_points_count=time_points_count,
-            num_epochs=args.epochs,
-            batch_size=64,
-            lr=0.005,
+            X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+            channels_count=channels_count, time_points_count=time_points_count,
+            num_epochs=args.epochs, batch_size=64, lr=0.005,
             temporal_kernel=temporal_kernel_len,
-            use_mixup=not args.no_mixup,
-            mixup_alpha=args.mixup_alpha,
+            use_mixup=not args.no_mixup, mixup_alpha=args.mixup_alpha,
             noise_std=args.noise_std,
         )
-        
-        # Evaluate on test set
         test_acc = evaluate_model_on_test_set(model_type, model, X_test, y_test, device)
         results[model_type] = test_acc
+
+    # Ensemble: DeepConvNet (clean) + EEGNet (mixup+noise)
+    if args.model in ("ensemble", "all"):
+        print("\n" + "=" * 60)
+        print("  Training Ensemble: DeepConvNet + EEGNet")
+        print("=" * 60)
+        dcn_model, _, device = train_deep_learning_model(
+            model_type="deep_conv_net",
+            X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+            channels_count=channels_count, time_points_count=time_points_count,
+            num_epochs=args.epochs, batch_size=64, lr=0.005,
+            temporal_kernel=temporal_kernel_len,
+            use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
+        )
+        eeg_model, _, _ = train_deep_learning_model(
+            model_type="eegnet",
+            X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+            channels_count=channels_count, time_points_count=time_points_count,
+            num_epochs=args.epochs, batch_size=64, lr=0.005,
+            temporal_kernel=15,
+            use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
+        )
+        dcn_acc = evaluate_model_on_test_set("deep_conv_net", dcn_model, X_test, y_test, device)
+        eeg_acc = evaluate_model_on_test_set("eegnet", eeg_model, X_test, y_test, device)
+        results["deep_conv_net"] = dcn_acc
+        results["eegnet"] = eeg_acc
+        ens_acc = evaluate_ensemble(dcn_model, eeg_model, X_test, y_test, device)
+        results["ensemble_dcn_eegnet"] = ens_acc
         
     # Run scikit-learn Baseline Classifier
     baseline_test_acc = run_logistic_regression_baseline(X_train, y_train, X_test, y_test)
