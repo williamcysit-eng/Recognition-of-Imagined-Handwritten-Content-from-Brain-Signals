@@ -6,3 +6,4 @@ data_EEG_AI.mat
 __pycache__/
 outputs/
 REFERENCE PAPER.pdf
+.vscode/
