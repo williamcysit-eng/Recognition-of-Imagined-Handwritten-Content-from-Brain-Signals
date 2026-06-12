@@ -159,7 +159,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     criterion = nn.CrossEntropyLoss(label_smoothing=0.0 if model_type == "deep_conv_net" else 0.1)
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.08 if model_type == "eeg_inception" else 0.05)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         mode='min',  # Monitor validation loss (minimize)

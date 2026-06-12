@@ -3,14 +3,8 @@ import torch.nn as nn
 
 
 class InceptionModule(nn.Module):
-    """
-    Inception module with three parallel temporal convolutions at different scales,
-    followed by a spatial filter that integrates across electrodes.
-    Adapted per the reference paper: shorter kernel lengths for capturing
-    fine temporal dynamics of handwriting imagery.
-    """
     def __init__(self, in_channels, out_per_branch, num_channels, kernels=(7, 5, 3),
-                 pool_size=(1, 2), dropout_rate=0.5):
+                 pool_size=(1, 2), dropout_rate=0.3):
         super(InceptionModule, self).__init__()
 
         self.branch1 = nn.Conv2d(in_channels, out_per_branch, kernel_size=(1, kernels[0]),
@@ -42,33 +36,22 @@ class InceptionModule(nn.Module):
 
 
 class EEGInception(nn.Module):
-    """
-    EEGInception adapted for handwriting imagery EEG classification.
-    Per the reference paper: shorter temporal kernels (100ms, 60ms, 40ms range)
-    to capture fine temporal dynamics. Two Inception modules followed by
-    two sequential conv blocks and a classification head.
-
-    Architecture adapted from Santamaria-Vazquez et al. (2020).
-    """
     def __init__(self, num_channels=24, num_classes=26, input_time_points=401,
-                 F_per_branch=16, dropout_rate=0.5):
+                 F_per_branch=24, dropout_rate=0.3):
         super(EEGInception, self).__init__()
 
-        # Inception Module 1
         self.inception1 = InceptionModule(
             in_channels=1, out_per_branch=F_per_branch,
             num_channels=num_channels, kernels=(7, 5, 3),
             pool_size=(1, 2), dropout_rate=dropout_rate
         )
 
-        # Inception Module 2
         self.inception2 = InceptionModule(
             in_channels=F_per_branch * 3, out_per_branch=F_per_branch,
             num_channels=1, kernels=(7, 5, 3),
             pool_size=(1, 2), dropout_rate=dropout_rate
         )
 
-        # Sequential Conv Block 1
         self.conv_block1 = nn.Sequential(
             nn.Conv2d(F_per_branch * 3, F_per_branch * 2, kernel_size=(1, 5),
                       padding=(0, 2), bias=False),
@@ -78,7 +61,6 @@ class EEGInception(nn.Module):
             nn.Dropout(dropout_rate),
         )
 
-        # Sequential Conv Block 2
         self.conv_block2 = nn.Sequential(
             nn.Conv2d(F_per_branch * 2, F_per_branch * 2, kernel_size=(1, 3),
                       padding=(0, 1), bias=False),
