@@ -46,7 +46,7 @@ if TORCH_AVAILABLE:
 # -----------------------------------------------------------------------------
 # DEFAULT PIPELINE CONFIGURATIONS (Change these to easily tune default runs)
 # -----------------------------------------------------------------------------
-DEFAULT_EPOCHS = 150
+DEFAULT_EPOCHS = 50
 DEFAULT_MIXUP = True
 DEFAULT_MIXUP_ALPHA = 0.2
 
