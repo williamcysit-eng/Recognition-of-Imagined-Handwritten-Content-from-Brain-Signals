@@ -36,7 +36,7 @@ except ImportError:
     print("scikit-learn is not available. Data splitting and baselines cannot be run.")
 
 # Set random seed for reproducibility
-RANDOM_SEED = 41
+RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 if TORCH_AVAILABLE:
     torch.manual_seed(RANDOM_SEED)
@@ -63,7 +63,7 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=1):
         raise FileNotFoundError(f"NumPy dataset archive not found at: {npz_path}. Run extract.py first.")
         
     dataset = np.load(npz_path, allow_pickle=False)
-    raw_data = dataset['data']  # (7800, 24, 801)
+    raw_data = dataset['data'].astype(np.float32)  # (7800, 24, 801)
     labels = dataset['labels_0indexed']  # (7800,)
     channels = list(dataset['channels'])
     time_points = dataset['time_points']
@@ -108,12 +108,25 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
                               channels_count, time_points_count, num_epochs=15, 
                               batch_size=64, lr=0.005, temporal_kernel=64,
                               use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
-                              use_swa=False, swa_start_epoch=30):
+                              use_swa=False, swa_start_epoch=30,
+                              force_cpu=False, quick_epochs=0):
     """
     Trains a deep learning model with validation-based checkpointing.
     """
+    if quick_epochs > 0:
+        num_epochs = quick_epochs
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if force_cpu:
+        device = torch.device("cpu")
+    is_cpu = device.type == "cpu"
     print(f"\nInitializing {model_type.upper()} on device: {device}")
+    
+    if is_cpu:
+        torch.backends.mkldnn.enabled = True
+        num_threads = max(1, os.cpu_count() - 2) if os.cpu_count() else 4
+        torch.set_num_threads(num_threads)
+        print(f"CPU optimizations: MKL-DNN enabled, {num_threads} threads")
+    
     if use_mixup:
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
     if use_swa:
@@ -152,11 +165,15 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
+    if is_cpu:
+        model = model.to(memory_format=torch.channels_last)
+    
     # Datasets and Loaders
     train_dataset = EEGDataset(X_train, y_train)
     val_dataset = EEGDataset(X_val, y_val)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    dl_kwargs = dict(num_workers=2, persistent_workers=True) if is_cpu else {}
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **dl_kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **dl_kwargs)
     
     criterion = nn.CrossEntropyLoss(label_smoothing=0.0 if model_type == "deep_conv_net" else 0.1)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
@@ -200,12 +217,14 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         
         for batch_x, batch_y in train_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            if is_cpu:
+                batch_x = batch_x.to(memory_format=torch.channels_last)
             
             # Gaussian noise augmentation for EEG signals
             if noise_std > 0:
                 batch_x = batch_x + torch.randn_like(batch_x) * noise_std
             
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             
             if use_mixup and mixup_alpha > 0:
                 lam = np.random.beta(mixup_alpha, mixup_alpha)
@@ -225,7 +244,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
                 
                 _, predicted = outputs.max(1)
                 correct_train += predicted.eq(batch_y).sum().item()
-                
+            
             loss.backward()
             optimizer.step()
             
@@ -409,6 +428,10 @@ if __name__ == "__main__":
                         help="Standard deviation of Gaussian noise augmentation (default: 0.0 = off)")
     parser.add_argument("--mixup-alpha", type=float, default=DEFAULT_MIXUP_ALPHA,
                         help=f"Alpha parameter for Beta distribution in Mixup (default: {DEFAULT_MIXUP_ALPHA})")
+    parser.add_argument("--cpu", action="store_true", default=False,
+                        help="Force CPU training (for timing benchmarks)")
+    parser.add_argument("--quick", type=int, default=0,
+                        help="Limit to N epochs for timing estimates (0 = full training)")
     args = parser.parse_args()
     
     if not TORCH_AVAILABLE or not SKLEARN_AVAILABLE:
@@ -454,6 +477,7 @@ if __name__ == "__main__":
             temporal_kernel=temporal_kernel_len,
             use_mixup=not args.no_mixup, mixup_alpha=args.mixup_alpha,
             noise_std=args.noise_std,
+            force_cpu=args.cpu, quick_epochs=args.quick,
         )
         test_acc = evaluate_model_on_test_set(model_type, model, X_test, y_test, device)
         results[model_type] = test_acc
@@ -470,6 +494,7 @@ if __name__ == "__main__":
             num_epochs=args.epochs, batch_size=64, lr=0.005,
             temporal_kernel=temporal_kernel_len,
             use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
+            force_cpu=args.cpu, quick_epochs=args.quick,
         )
         eeg_model, _, _ = train_deep_learning_model(
             model_type="eegnet",
@@ -479,6 +504,7 @@ if __name__ == "__main__":
             temporal_kernel=15,
             use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
             use_swa=True, swa_start_epoch=25,
+            force_cpu=args.cpu, quick_epochs=args.quick,
         )
         dcn_acc = evaluate_model_on_test_set("deep_conv_net", dcn_model, X_test, y_test, device)
         eeg_acc = evaluate_model_on_test_set("eegnet", eeg_model, X_test, y_test, device)
