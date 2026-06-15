@@ -166,6 +166,9 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     if is_cpu:
+        if hasattr(torch, 'compile'):
+            model = torch.compile(model, mode="reduce-overhead")
+            print("torch.compile enabled (reduce-overhead mode)")
         model = model.to(memory_format=torch.channels_last)
     
     # Datasets and Loaders
@@ -244,7 +247,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
                 
                 _, predicted = outputs.max(1)
                 correct_train += predicted.eq(batch_y).sum().item()
-            
+                
             loss.backward()
             optimizer.step()
             
@@ -477,7 +480,6 @@ if __name__ == "__main__":
             temporal_kernel=temporal_kernel_len,
             use_mixup=not args.no_mixup, mixup_alpha=args.mixup_alpha,
             noise_std=args.noise_std,
-            force_cpu=args.cpu, quick_epochs=args.quick,
         )
         test_acc = evaluate_model_on_test_set(model_type, model, X_test, y_test, device)
         results[model_type] = test_acc
@@ -494,7 +496,6 @@ if __name__ == "__main__":
             num_epochs=args.epochs, batch_size=64, lr=0.005,
             temporal_kernel=temporal_kernel_len,
             use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
-            force_cpu=args.cpu, quick_epochs=args.quick,
         )
         eeg_model, _, _ = train_deep_learning_model(
             model_type="eegnet",
@@ -504,7 +505,6 @@ if __name__ == "__main__":
             temporal_kernel=15,
             use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
             use_swa=True, swa_start_epoch=25,
-            force_cpu=args.cpu, quick_epochs=args.quick,
         )
         dcn_acc = evaluate_model_on_test_set("deep_conv_net", dcn_model, X_test, y_test, device)
         eeg_acc = evaluate_model_on_test_set("eegnet", eeg_model, X_test, y_test, device)
