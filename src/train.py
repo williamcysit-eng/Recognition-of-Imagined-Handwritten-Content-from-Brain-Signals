@@ -107,7 +107,8 @@ def load_and_split_data_pipeline(npz_path, downsample_factor=1):
 def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val, 
                               channels_count, time_points_count, num_epochs=15, 
                               batch_size=64, lr=0.005, temporal_kernel=64,
-                              use_mixup=False, mixup_alpha=0.2, noise_std=0.0):
+                              use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
+                              use_swa=False, swa_start_epoch=30):
     """
     Trains a deep learning model with validation-based checkpointing.
     """
@@ -115,6 +116,8 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     print(f"\nInitializing {model_type.upper()} on device: {device}")
     if use_mixup:
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
+    if use_swa:
+        print(f"SWA enabled: averaging weights from epoch {swa_start_epoch}")
     
     if model_type == "deep_conv_net":
         dcn_kernel = 15  # 60ms at 250Hz
@@ -159,9 +162,9 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
-        mode='min',  # Monitor validation loss (minimize)
+        mode='min',
         factor=0.5, 
-        patience=3,  # Wait 3 epochs before reducing learning rate
+        patience=3,
         min_lr=1e-6
     )
     
@@ -171,6 +174,10 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     # Early Stopping config
     patience = 40
     epochs_no_improve = 0
+    
+    # SWA tracking
+    swa_state_dict = None
+    swa_n = 0
     
     history = {
         'train_loss': [], 'train_acc': [],
@@ -259,8 +266,17 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
         history['val_loss'].append(epoch_val_loss)
         history['val_acc'].append(epoch_val_acc)
         
-        # ReduceLROnPlateau scheduler step based on validation loss
         scheduler.step(epoch_val_loss)
+        
+        # SWA weight averaging (start after warmup)
+        if use_swa and epoch >= swa_start_epoch:
+            if swa_state_dict is None:
+                swa_state_dict = {k: v.clone().detach() for k, v in model.state_dict().items()}
+                swa_n = 1
+            else:
+                for k in swa_state_dict:
+                    swa_state_dict[k] = (swa_state_dict[k] * swa_n + model.state_dict()[k].detach()) / (swa_n + 1)
+                swa_n += 1
         
         print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{epoch_time:<8.1f}")
         
@@ -278,10 +294,14 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             break
             
     print("-" * 70)
-    print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
-    print(f"Loading optimal model weights from Epoch {best_epoch} (prevents overfitting)...")
+    if use_swa and swa_state_dict is not None:
+        print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
+        print(f"Using SWA model (averaged {swa_n} checkpoints from epoch {swa_start_epoch} to {epoch})...")
+    else:
+        print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
+        print(f"Loading optimal model weights from Epoch {best_epoch} (prevents overfitting)...")
     
-    # Reload optimal model weights
+    # Reload optimal model weights or use SWA
     if model_type == "deep_conv_net":
         dcn_kernel = 15
         best_model = DeepConvNet(
@@ -306,8 +326,11 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             input_time_points=time_points_count,
             dropout_rate=0.3
         ).to(device)
-        
-    best_model.load_state_dict(torch.load(best_model_path, map_location=device))
+    
+    if use_swa and swa_state_dict is not None:
+        best_model.load_state_dict(swa_state_dict)
+    else:
+        best_model.load_state_dict(torch.load(best_model_path, map_location=device))
     return best_model, history, device
 
 
@@ -455,6 +478,7 @@ if __name__ == "__main__":
             num_epochs=args.epochs, batch_size=64, lr=0.005,
             temporal_kernel=15,
             use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
+            use_swa=True, swa_start_epoch=25,
         )
         dcn_acc = evaluate_model_on_test_set("deep_conv_net", dcn_model, X_test, y_test, device)
         eeg_acc = evaluate_model_on_test_set("eegnet", eeg_model, X_test, y_test, device)
