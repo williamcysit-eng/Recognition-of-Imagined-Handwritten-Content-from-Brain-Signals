@@ -109,7 +109,8 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
                               batch_size=64, lr=0.005, temporal_kernel=64,
                               use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
                               use_swa=False, swa_start_epoch=30,
-                              force_cpu=False, quick_epochs=0):
+                              force_cpu=False, quick_epochs=0,
+                              cpu_threads=None):
     """
     Trains a deep learning model with validation-based checkpointing.
     """
@@ -123,7 +124,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     
     if is_cpu:
         torch.backends.mkldnn.enabled = True
-        num_threads = max(1, os.cpu_count() - 2) if os.cpu_count() else 4
+        num_threads = cpu_threads if cpu_threads is not None else (max(1, os.cpu_count() - 2) if os.cpu_count() else 4)
         torch.set_num_threads(num_threads)
         print(f"CPU optimizations: MKL-DNN enabled, {num_threads} threads")
     
@@ -495,6 +496,7 @@ if __name__ == "__main__":
         if args.cpu:
             print("Launching parallel CPU training (DCN + EEGNet in parallel threads)...")
             from concurrent.futures import ThreadPoolExecutor
+            parallel_threads = max(1, (os.cpu_count() - 2) // 2) if os.cpu_count() else 2
             
             def _train_dcn():
                 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -506,6 +508,7 @@ if __name__ == "__main__":
                     temporal_kernel=temporal_kernel_len,
                     use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
                     force_cpu=True, quick_epochs=args.quick,
+                    cpu_threads=parallel_threads,
                 )
             def _train_eeg():
                 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -518,6 +521,7 @@ if __name__ == "__main__":
                     use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
                     use_swa=True, swa_start_epoch=25,
                     force_cpu=True, quick_epochs=args.quick,
+                    cpu_threads=parallel_threads,
                 )
             
             with ThreadPoolExecutor(max_workers=2) as executor:
