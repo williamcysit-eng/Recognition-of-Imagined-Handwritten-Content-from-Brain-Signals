@@ -166,9 +166,6 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     if is_cpu:
-        if hasattr(torch, 'compile'):
-            model = torch.compile(model, mode="reduce-overhead")
-            print("torch.compile enabled (reduce-overhead mode)")
         model = model.to(memory_format=torch.channels_last)
     
     # Datasets and Loaders
@@ -489,23 +486,74 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print("  Training Ensemble: DeepConvNet + EEGNet")
         print("=" * 60)
-        dcn_model, _, device = train_deep_learning_model(
-            model_type="deep_conv_net",
-            X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
-            channels_count=channels_count, time_points_count=time_points_count,
-            num_epochs=args.epochs, batch_size=64, lr=0.005,
-            temporal_kernel=temporal_kernel_len,
-            use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
-        )
-        eeg_model, _, _ = train_deep_learning_model(
-            model_type="eegnet",
-            X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
-            channels_count=channels_count, time_points_count=time_points_count,
-            num_epochs=args.epochs, batch_size=64, lr=0.005,
-            temporal_kernel=15,
-            use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
-            use_swa=True, swa_start_epoch=25,
-        )
+        if args.cpu:
+            print("Launching parallel CPU training (DCN + EEGNet in parallel threads)...")
+            from concurrent.futures import ThreadPoolExecutor
+            
+            def _train_dcn():
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                return train_deep_learning_model(
+                    model_type="deep_conv_net",
+                    X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+                    channels_count=channels_count, time_points_count=time_points_count,
+                    num_epochs=args.epochs, batch_size=64, lr=0.005,
+                    temporal_kernel=temporal_kernel_len,
+                    use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
+                    force_cpu=True, quick_epochs=args.quick,
+                )
+            def _train_eeg():
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                return train_deep_learning_model(
+                    model_type="eegnet",
+                    X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+                    channels_count=channels_count, time_points_count=time_points_count,
+                    num_epochs=args.epochs, batch_size=64, lr=0.005,
+                    temporal_kernel=15,
+                    use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
+                    use_swa=True, swa_start_epoch=25,
+                    force_cpu=True, quick_epochs=args.quick,
+                )
+            
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                dcn_future = executor.submit(_train_dcn)
+                eeg_future = executor.submit(_train_eeg)
+                dcn_model, _, _ = dcn_future.result()
+                eeg_model, _, device = eeg_future.result()
+            
+            device = torch.device("cpu")
+            ckpt_dir = os.path.join(ROOT_DIR, "models", "checkpoints")
+            dcn_model = DeepConvNet(
+                num_channels=channels_count, num_classes=26,
+                input_time_points=time_points_count,
+                temporal_kernel=15, dropout_rate=0.5
+            ).to(device)
+            dcn_model.load_state_dict(torch.load(
+                os.path.join(ckpt_dir, "best_deep_conv_net.pth"), map_location=device))
+            eeg_model = EEGNet82(
+                num_channels=channels_count, num_classes=26,
+                input_time_points=time_points_count,
+                temporal_kernel_length=15, dropout_rate=0.3
+            ).to(device)
+            eeg_model.load_state_dict(torch.load(
+                os.path.join(ckpt_dir, "best_eegnet.pth"), map_location=device))
+        else:
+            dcn_model, _, device = train_deep_learning_model(
+                model_type="deep_conv_net",
+                X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+                channels_count=channels_count, time_points_count=time_points_count,
+                num_epochs=args.epochs, batch_size=64, lr=0.005,
+                temporal_kernel=temporal_kernel_len,
+                use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
+            )
+            eeg_model, _, _ = train_deep_learning_model(
+                model_type="eegnet",
+                X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+                channels_count=channels_count, time_points_count=time_points_count,
+                num_epochs=args.epochs, batch_size=64, lr=0.005,
+                temporal_kernel=15,
+                use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
+                use_swa=True, swa_start_epoch=25,
+            )
         dcn_acc = evaluate_model_on_test_set("deep_conv_net", dcn_model, X_test, y_test, device)
         eeg_acc = evaluate_model_on_test_set("eegnet", eeg_model, X_test, y_test, device)
         results["deep_conv_net"] = dcn_acc
