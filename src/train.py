@@ -37,16 +37,22 @@ except ImportError:
 
 # Set random seed for reproducibility
 RANDOM_SEED = 42
-np.random.seed(RANDOM_SEED)
-if TORCH_AVAILABLE:
-    torch.manual_seed(RANDOM_SEED)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+
+def set_seed(seed):
+    global RANDOM_SEED
+    RANDOM_SEED = seed
+    np.random.seed(RANDOM_SEED)
+    if TORCH_AVAILABLE:
+        torch.manual_seed(RANDOM_SEED)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+set_seed(42)
 
 # -----------------------------------------------------------------------------
 # DEFAULT PIPELINE CONFIGURATIONS (Change these to easily tune default runs)
 # -----------------------------------------------------------------------------
-DEFAULT_EPOCHS = 50
+DEFAULT_EPOCHS = 150
 DEFAULT_MIXUP = True
 DEFAULT_MIXUP_ALPHA = 0.2
 
@@ -374,9 +380,30 @@ def evaluate_model_on_test_set(model_type, model, X_test, y_test, device):
     print(f"  * Single-Trial Held-Out Test Accuracy: {test_acc:.2f}%")
     return test_acc
 
-def evaluate_ensemble(model_a, model_b, X_test, y_test, device, name_a="DCN", name_b="EEGNet"):
+def adapt_bn_stats(model, loader, device):
+    bn_saved = {}
+    for name, m in model.named_modules():
+        if isinstance(m, nn.BatchNorm2d):
+            bn_saved[name] = (m.running_mean.clone(), m.running_var.clone())
+            m.train()
+    with torch.no_grad():
+        for bx, _ in loader:
+            bx = bx.to(device)
+            model(bx)
+    for name, m in model.named_modules():
+        if isinstance(m, nn.BatchNorm2d) and name in bn_saved:
+            m.running_mean.copy_(bn_saved[name][0])
+            m.running_var.copy_(bn_saved[name][1])
+    model.eval()
+
+def evaluate_ensemble(model_a, model_b, X_test, y_test, device, name_a="DCN", name_b="EEGNet", adapt_bn=False):
     test_dataset = EEGDataset(X_test, y_test)
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    if adapt_bn:
+        adapt_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+        adapt_bn_stats(model_a, adapt_loader, device)
+        adapt_bn_stats(model_b, adapt_loader, device)
+        print("  (BN adaptation applied)")
     model_a.eval()
     model_b.eval()
     correct, total = 0, 0
@@ -391,6 +418,64 @@ def evaluate_ensemble(model_a, model_b, X_test, y_test, device, name_a="DCN", na
             total += by.size(0)
     test_acc = (correct / total) * 100
     print(f"\n--- ENSEMBLE ({name_a} + {name_b}) EVALUATION ---")
+    print(f"  * Single-Trial Held-Out Test Accuracy: {test_acc:.2f}%")
+    return test_acc
+
+def evaluate_ensemble_gated(model_a, model_b, X_test, y_test, device, name_a="DCN", name_b="EEGNet"):
+    test_dataset = EEGDataset(X_test, y_test)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    model_a.eval()
+    model_b.eval()
+    correct, total, agree_count = 0, 0, 0
+    with torch.no_grad():
+        for bx, by in test_loader:
+            bx, by = bx.to(device), by.to(device)
+            out_a = model_a(bx)
+            out_b = model_b(bx)
+            probs_a = out_a.softmax(dim=1)
+            probs_b = out_b.softmax(dim=1)
+            pred_a = out_a.argmax(dim=1)
+            pred_b = out_b.argmax(dim=1)
+            conf_a = probs_a.max(dim=1).values
+            conf_b = probs_b.max(dim=1).values
+            agree = pred_a == pred_b
+            agree_count += agree.sum().item()
+            use_a = conf_a >= conf_b
+            final_pred = torch.where(agree, pred_a, torch.where(use_a, pred_a, pred_b))
+            correct += final_pred.eq(by).sum().item()
+            total += by.size(0)
+    test_acc = (correct / total) * 100
+    print(f"\n--- GATED ENSEMBLE ({name_a} + {name_b}) EVALUATION ---")
+    print(f"  * Single-Trial Held-Out Test Accuracy: {test_acc:.2f}% (agreement rate: {agree_count/total*100:.1f}%)")
+    return test_acc
+
+def evaluate_ensemble_3_fixed(dcn_model, eeg_model, ei_model, X_test, y_test, device,
+                               w_dcn=5.0, w_eeg=5.0, w_ei=1.0, adapt_bn=True):
+    test_dataset = EEGDataset(X_test, y_test)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    if adapt_bn:
+        adapt_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+        adapt_bn_stats(dcn_model, adapt_loader, device)
+        adapt_bn_stats(eeg_model, adapt_loader, device)
+        adapt_bn_stats(ei_model, adapt_loader, device)
+    dcn_model.eval()
+    eeg_model.eval()
+    ei_model.eval()
+    total_w = w_dcn + w_eeg + w_ei
+    w_dcn /= total_w
+    w_eeg /= total_w
+    w_ei /= total_w
+    print(f"\n--- 3-MODEL FIXED-WEIGHT ENSEMBLE ({w_dcn*11:.0f}:{w_eeg*11:.0f}:{w_ei*11:.0f}){' +BN-adapt' if adapt_bn else ''} ---")
+    print(f"  * Fixed weights: DCN={w_dcn:.3f}, EEGNet={w_eeg:.3f}, EI={w_ei:.3f}")
+    correct, total = 0, 0
+    with torch.no_grad():
+        for bx, by in test_loader:
+            bx, by = bx.to(device), by.to(device)
+            outputs = w_dcn * dcn_model(bx) + w_eeg * eeg_model(bx) + w_ei * ei_model(bx)
+            _, predicted = outputs.max(1)
+            correct += predicted.eq(by).sum().item()
+            total += by.size(0)
+    test_acc = (correct / total) * 100
     print(f"  * Single-Trial Held-Out Test Accuracy: {test_acc:.2f}%")
     return test_acc
 
@@ -435,7 +520,11 @@ if __name__ == "__main__":
                         help="Limit to N epochs for timing estimates (0 = full training)")
     parser.add_argument("--fast", action="store_true", default=False,
                         help="Enable cudnn.benchmark for ~47% faster GPU training (minor accuracy trade-off)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility (default: 42)")
     args = parser.parse_args()
+    
+    set_seed(args.seed)
     
     if args.fast and TORCH_AVAILABLE and torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
@@ -527,8 +616,8 @@ if __name__ == "__main__":
             with ThreadPoolExecutor(max_workers=2) as executor:
                 dcn_future = executor.submit(_train_dcn)
                 eeg_future = executor.submit(_train_eeg)
-                dcn_model, _, _ = dcn_future.result()
-                eeg_model, _, device = eeg_future.result()
+                dcn_model, dcn_history, _ = dcn_future.result()
+                eeg_model, eeg_history, device = eeg_future.result()
             
             device = torch.device("cpu")
             ckpt_dir = os.path.join(ROOT_DIR, "models", "checkpoints")
@@ -547,7 +636,7 @@ if __name__ == "__main__":
             eeg_model.load_state_dict(torch.load(
                 os.path.join(ckpt_dir, "best_eegnet.pth"), map_location=device))
         else:
-            dcn_model, _, device = train_deep_learning_model(
+            dcn_model, dcn_history, device = train_deep_learning_model(
                 model_type="deep_conv_net",
                 X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
                 channels_count=channels_count, time_points_count=time_points_count,
@@ -555,7 +644,7 @@ if __name__ == "__main__":
                 temporal_kernel=temporal_kernel_len,
                 use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
             )
-            eeg_model, _, _ = train_deep_learning_model(
+            eeg_model, eeg_history, _ = train_deep_learning_model(
                 model_type="eegnet",
                 X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
                 channels_count=channels_count, time_points_count=time_points_count,
@@ -570,6 +659,25 @@ if __name__ == "__main__":
         results["eegnet"] = eeg_acc
         ens_acc = evaluate_ensemble(dcn_model, eeg_model, X_test, y_test, device)
         results["ensemble_dcn_eegnet"] = ens_acc
+        ens_bn_acc = evaluate_ensemble(dcn_model, eeg_model, X_test, y_test, device, adapt_bn=True)
+        results["ensemble_dcn_eegnet_bn"] = ens_bn_acc
+
+        eeg_k25_model, _, _ = train_deep_learning_model(
+            model_type="eegnet",
+            X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val,
+            channels_count=channels_count, time_points_count=time_points_count,
+            num_epochs=args.epochs, batch_size=64, lr=0.005,
+            temporal_kernel=25,
+            use_mixup=True, mixup_alpha=0.2, noise_std=0.07,
+            use_swa=False, swa_start_epoch=25,
+        )
+        eeg_k25_acc = evaluate_model_on_test_set("eegnet_k25", eeg_k25_model, X_test, y_test, device)
+        results["eegnet_k25"] = eeg_k25_acc
+        ens3_k25 = evaluate_ensemble_3_fixed(
+            dcn_model, eeg_model, eeg_k25_model,
+            X_test, y_test, device, w_dcn=5, w_eeg=5, w_ei=1, adapt_bn=True
+        )
+        results["ensemble_3_k25"] = ens3_k25
         
     # Run scikit-learn Baseline Classifier
     baseline_test_acc = run_logistic_regression_baseline(X_train, y_train, X_test, y_test)

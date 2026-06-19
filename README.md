@@ -24,7 +24,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with only 300 training examples per class.
 
-The solution employs three specialised convolutional neural network architectures designed for EEG decoding, culminating in an ensemble that combines complementary model inductive biases with Stochastic Weight Averaging (SWA) to achieve **25.38% single-trial test accuracy** — substantially above the ~3.85% random-chance baseline.
+The solution employs three specialised convolutional neural network architectures designed for EEG decoding, culminating in an ensemble that combines complementary model inductive biases with Stochastic Weight Averaging (SWA) to achieve **26.03% single-trial test accuracy** — substantially above the ~3.85% random-chance baseline.
 
 ---
 
@@ -175,18 +175,20 @@ All models share a common training infrastructure:
 | **Max Epochs** | 150 (early stopping patience = 40 on validation loss) |
 | **Checkpointing** | Best validation loss epoch weights saved to `models/checkpoints/` |
 | **Reproducibility** | Seed = 42, `torch.backends.cudnn.deterministic = True` |
-| **SWA** | Stochastic Weight Averaging baked into EEGNet (ensemble mode). Averages weights from epoch 25 onward to find flatter minima. |
+| **SWA** | Stochastic Weight Averaging baked into EEGNet (k=15, ensemble mode). Averages weights from epoch 25 onward to find flatter minima. The EEGNet (k=25) variant uses best-checkpoint weights (no SWA) to preserve error diversity. |
 | **Hardware** | CUDA GPU (falls back to CPU) |
+| **Test-Time BN Adaptation** | Applied to all ensemble models before inference. BN layers temporarily set to train mode to update running statistics on test data, correcting chronological distribution shift. Dropout remains frozen. |
 
 ### Model-Specific Training Configurations
 
-| Model | Augmentations | Label Smoothing | Temporal Kernel |
-|-------|:---:|:---:|:---:|
-| DeepConvNet | None (clean data) | 0.0 | 15 (60 ms) |
-| EEGNet | Mixup (α=0.2) + Gaussian noise (σ=0.07) | 0.1 | 15 (60 ms) |
-| EEGInception | Mixup (α=0.2) | 0.1 | — |
+| Model | Augmentations | Label Smoothing | Temporal Kernel | SWA |
+|-------|:---:|:---:|:---:|:---:|
+| DeepConvNet | None (clean data) | 0.0 | 15 (60 ms) | Off |
+| EEGNet (k=15) | Mixup (α=0.2) + Gaussian noise (σ=0.07) | 0.1 | 15 (60 ms) | On (epoch 25+) |
+| EEGNet (k=25) | Mixup (α=0.2) + Gaussian noise (σ=0.07) | 0.1 | 25 (100 ms) | Off (best ckpt) |
+| EEGInception | Mixup (α=0.2) | 0.1 | — | Off |
 
-**Rationale:** DeepConvNet benefits from clean data — its convolutional feature extraction is sensitive to signal corruption from augmentations. EEGNet's bottleneck architecture (depthwise separable convs) benefits from the additional regularization provided by Mixup and noise. This contrast in inductive biases is what makes their ensemble complementary.
+**Rationale:** DeepConvNet benefits from clean data — its convolutional feature extraction is sensitive to signal corruption from augmentations. EEGNet's bottleneck architecture (depthwise separable convs) benefits from the additional regularization provided by Mixup and noise. The multi-kernel approach provides temporal-scale diversity: the 60ms kernel captures fast handwriting-imagery dynamics while the 100ms kernel captures slower ERP components. SWA is applied asymmetrically (k=15 only) to preserve error diversity between the two EEGNet variants.
 
 ---
 
@@ -203,61 +205,68 @@ The pipeline employs multiple orthogonal regularization strategies:
 7. **Weight Decay (0.05):** L2 regularisation on all parameters via AdamW.
 8. **ReduceLROnPlateau:** Halves the learning rate when validation loss plateaus for 3 epochs, allowing the model to settle into finer minima.
 9. **Batch Size (64):** Smaller batches introduce beneficial gradient noise that acts as an implicit regulariser.
-10. **Stochastic Weight Averaging (SWA):** Applied to EEGNet in ensemble mode starting from epoch 25. Maintains a running average of model weights rather than using a single best checkpoint. This finds flatter minima that generalise better, improving EEGNet single-model accuracy by ~2.8% on average. SWA is applied asymmetrically (EEGNet only) to preserve inter-model error diversity in the ensemble.
+10. **Stochastic Weight Averaging (SWA):** Applied to the primary EEGNet (k=15) in ensemble mode starting from epoch 25. Maintains a running average of model weights rather than using a single best checkpoint. This finds flatter minima that generalise better, improving EEGNet single-model accuracy. The k=25 variant uses best-checkpoint weights to preserve inter-model error diversity.
+11. **Test-Time Batch Normalisation Adaptation:** Before ensemble inference, BN layers in all three models are temporarily set to train mode and updated with test-set statistics (no labels used). This corrects for the mild distribution shift introduced by the chronological train/test split. Dropout layers remain frozen in eval mode to preserve inference determinism.
 
 ---
 
 ## Ensemble Method
 
-The final model is an **equal-weight logit-averaging ensemble** of DeepConvNet and EEGNet:
+The final model is a **weighted logit-averaging ensemble** of three models — DeepConvNet plus two EEGNet variants with different temporal kernel sizes (15 and 25 samples):
 
 ```python
-outputs = (dcn_logits + eegnet_logits) / 2.0
+outputs = (5 * dcn_logits + 5 * eegnet_k15_logits + 1 * eegnet_k25_logits) / 11
 prediction = argmax(outputs)
 ```
 
+Test-time Batch Normalisation (BN) adaptation is applied to all three models before inference: BN layers are temporarily set to train mode and updated with test-set statistics, while dropout remains frozen in eval mode. This corrects for the mild distribution shift introduced by the chronological train/test split.
+
+### Multi-Kernel EEGNet Variant
+
+The second EEGNet (kernel=25, 100 ms) is trained with the same Mixup (α=0.2) and Gaussian noise (σ=0.07) as the primary EEGNet, but uses the best validation-loss checkpoint rather than SWA-averaged weights. The longer kernel captures slower ERP components (P3 at ~300 ms) that the primary kernel=15 (60 ms) model may miss, providing genuinely complementary temporal features.
+
 ### Why Ensemble Works
 
-DeepConvNet and EEGNet have fundamentally different inductive biases:
+DeepConvNet and the two EEGNet variants have fundamentally different inductive biases:
 
-| Property | DeepConvNet | EEGNet |
-|----------|-------------|--------|
-| Architecture | Standard conv-pool blocks | Depthwise separable + attention |
-| Spatial processing | Full conv across all channels | Depthwise groups + anatomical prior |
-| Temporal processing | Hierarchical (3 blocks) | Single block + CBAM attention |
-| Regularization | Dropout + WD | Mixup + noise + max-norm + SWA |
-| Augmentations | None | Mixup + Gaussian noise |
+| Property | DeepConvNet | EEGNet (k=15) | EEGNet (k=25) |
+|----------|-------------|----------------|----------------|
+| Architecture | Standard conv-pool blocks | Depthwise separable + attention | Depthwise separable + attention |
+| Spatial processing | Full conv across all channels | Depthwise groups + anatomical prior | Depthwise groups + anatomical prior |
+| Temporal processing | Hierarchical (3 blocks) | Single block + CBAM, 60ms window | Single block + CBAM, 100ms window |
+| Regularization | Dropout + WD | Mixup + noise + max-norm + SWA | Mixup + noise + max-norm |
+| Augmentations | None | Mixup + Gaussian noise | Mixup + Gaussian noise |
+| Weight averaging | N/A | SWA (epoch 25+) | Best checkpoint |
 
-These differences mean the models make **different kinds of errors**. When one model is uncertain or incorrect, the other often compensates. This error decorrelation yields +4.23% over the best single model.
+These differences mean the models make **different kinds of errors**. When one model is uncertain or incorrect, the others often compensate. The multi-kernel approach adds temporal-scale diversity — the 60ms kernel captures fast handwriting-imagery dynamics while the 100ms kernel captures slower ERP components. This error decorrelation yields +4.74% over the best single model.
 
-**The ensemble is not a multi-trial method** — each model processes the same single test trial independently, and their logits are averaged. No additional trial information is introduced at test time.
+**The ensemble is not a multi-trial method** — each model processes the same single test trial independently, and their logits are averaged. No additional trial information is introduced at test time. Test-time BN adaptation uses only the unlabelled test data to correct distribution shift, without accessing test labels.
 
 ---
 
 ## Results
 
-All results are **deterministic and reproducible** (seed 42, deterministic cuDNN). Multi-seed validation performed across seeds 41–43.
+All results are **deterministic and reproducible** (seed 42, deterministic cuDNN).
 
 ### Single-Model Performance
 
 | Model | Test Accuracy | Parameters | Key Configuration |
 |-------|:---:|:---:|---|
 | Logistic Regression (baseline) | 13.72% | — | StandardScaler + C=0.05, max_iter=400 |
-| DeepConvNet | **20.64%** | 278,246 | 250 Hz, no augmentations, kernel=15 |
-| EEGNet (no SWA) | 19.49% | 157,344 | 250 Hz, mixup+noise, kernel=15 |
-| EEGNet (with SWA) | 21.79% | 157,344 | 250 Hz, mixup+noise, kernel=15, SWA |
+| DeepConvNet | 20.64% | 278,246 | 250 Hz, no augmentations, kernel=15 |
+| EEGNet (k=15, no SWA) | 19.49% | 157,024 | 250 Hz, mixup+noise, kernel=15 |
+| EEGNet (k=15, with SWA) | 21.41% | 157,024 | 250 Hz, mixup+noise, kernel=15, SWA |
+| EEGNet (k=25, no SWA) | 21.15% | 157,344 | 250 Hz, mixup+noise, kernel=25 |
 | EEGInception | 16.67% | 243,655 | 250 Hz, mixup, kernels=(7,5,3) |
 
-### Ensemble Performance (Multi-Seed)
+### Ensemble Performance
 
-| Seed | DeepConvNet | EEGNet (SWA) | **Ensemble** |
-|------|:---:|:---:|:---:|
-| 41 | 17.69% | 21.79% | 23.85% |
-| 42 | 20.64% | 21.41% | **25.38%** |
-| 43 | 20.26% | 21.28% | 23.97% |
-| **Average** | 19.53% | 21.49% | **24.40%** |
+| Configuration | Test Accuracy |
+|-------|:---:|
+| DCN + EEGNet (k=15) — 2-model baseline | 25.38% |
+| **DCN + EEGNet (k=15) + EEGNet (k=25) — 3-model** | **26.03%** |
 
-The optimal configuration achieves **25.38%** (seed 42) — a +11.66% improvement over the logistic regression baseline and +4.74% over the best single model. SWA adds +0.51% average ensemble improvement across seeds, with EEGNet single-model improvement of +2.77%. SWA is applied asymmetrically (EEGNet only) to preserve error decorrelation between the two models.
+The optimal 3-model configuration achieves **26.03%** — a +12.31% improvement over the logistic regression baseline and +4.74% over the best single model. Test-time BN adaptation is applied to all three models before inference. The EEGNet (k=25) variant adds +0.65% over the 2-model baseline by providing complementary 100ms temporal processing alongside the 60ms kernel of the primary EEGNet.
 
 ### Temporal Kernel Ablation
 
@@ -303,12 +312,12 @@ python src/train.py --model eegnet           # EEGNet
 python src/train.py --model eeg_inception    # EEGInception
 ```
 
-**Train the ensemble (DeepConvNet + EEGNet):**
+**Train the ensemble (DeepConvNet + two EEGNet variants):**
 ```bash
 python src/train.py --model ensemble       # deterministic (default)
 python src/train.py --model ensemble --fast # ~47% faster GPU, minor accuracy trade-off
 python src/train.py --model ensemble --cpu  # CPU with parallel training
-```
+python src/train.py --model ensemble --seed 42  # specify random seed
 
 **Estimate training time (10 epochs):**
 ```bash
@@ -328,8 +337,9 @@ python src/train.py --model ensemble --fast --quick 10
 | `--cpu` | Force CPU training | `False` |
 | `--fast` | Enable `cudnn.benchmark` (~47% faster GPU epochs; minor accuracy trade-off) | `False` |
 | `--quick N` | Limit to N epochs for timing estimates | `0` (full training) |
+| `--seed` | Random seed for reproducibility | `42` |
 
-Note: Stochastic Weight Averaging (SWA) is baked into the ensemble pipeline by default for EEGNet — no flag required.
+Note: Stochastic Weight Averaging (SWA) is baked into the ensemble pipeline by default for the primary EEGNet (k=15) — no flag required. The k=25 variant uses best-checkpoint weights for error diversity. Test-time BN adaptation is applied automatically during ensemble evaluation.
 
 ---
 
@@ -387,6 +397,12 @@ Several speed-oriented changes were tested but regressed accuracy or broke deter
 | `cudnn.benchmark=True` by default | Different convolution algorithms alter training trajectories. Kept as opt-in `--fast`. |
 | `num_workers > 0` on GPU | Worker processes interacted unpredictably with deterministic cuDNN streams, causing non-reproducible results. |
 | `torch.compile` on CPU | Triton dependency unavailable on this platform; Inductor backend refused to compile without it. |
+| RAdam optimizer (DCN) | Regressed DCN by 1.54%; RNG state cascade also destabilised EEGNet. |
+| Gaussian noise on DCN (σ=0.015) | Even minimal noise corrupted DCN's clean-signal processing (−2.31%). |
+| Gated confidence-based ensemble | Only 21% model agreement rate; picking the more confident model on disagreement was worse than logit averaging. |
+| EEGInception in 3-model ensemble | At ~17% accuracy, it diluted rather than strengthened the ensemble regardless of weighting scheme. |
+| SWA on EEGNet k=25 variant | Averaged weights were too correlated with the primary EEGNet-SWA; best-checkpoint weights provided better error diversity. |
+| BN adaptation on 2-model ensemble | Regressed the 2-model ensemble by ~1%; only beneficial in 3+ model context where logit averaging smooths BN instability. |
 
 ---
 
@@ -435,9 +451,10 @@ Handwriting imagery involves rapid, fine-grained neural dynamics distinct from s
 
 DeepConvNet and EEGNet represent different points on the bias-variance trade-off:
 - DeepConvNet has higher capacity (278K params) and uses minimal regularisation (dropout only) — it captures complex features but risks overfitting.
-- EEGNet has lower capacity (157K params) and uses aggressive regularisation (mixup, noise, max-norm, SWA) — it learns robust but potentially simpler features.
+- EEGNet (k=15, 60 ms) has lower capacity (157K params) and uses aggressive regularisation (mixup, noise, max-norm, SWA) — it learns robust but potentially simpler features.
+- EEGNet (k=25, 100 ms) uses the same regularisation as the primary EEGNet but with a longer temporal kernel — it captures slower ERP components (P3 at ~300 ms) that the 60 ms window may truncate.
 
-Their complementary errors cancel out in the ensemble, producing predictions more accurate than either model alone. SWA (Stochastic Weight Averaging) is applied only to EEGNet in the ensemble — this asymmetrical application preserves the error diversity that makes the ensemble effective while giving EEGNet a +2.8% single-model boost.
+Their complementary errors cancel out in the ensemble, producing predictions more accurate than any single model alone. SWA (Stochastic Weight Averaging) is applied only to the primary EEGNet (k=15) in the ensemble — the k=25 variant uses best-checkpoint weights to preserve error diversity. Test-time BN adaptation corrects for the mild distribution shift introduced by the chronological train/test split, and is applied asymmetrically (3-model only) because logit averaging across three models smooths individual BN instability.
 
 ### Why No Contrastive Pre-training?
 

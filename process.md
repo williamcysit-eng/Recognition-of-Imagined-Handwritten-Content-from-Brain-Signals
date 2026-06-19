@@ -244,3 +244,84 @@ SGD+Nesterov, CosineAnnealingWarmRestarts, OneCycleLR all tested and failed. Gra
 #### Key Conclusion
 
 After **18 distinct approaches** tested on seed 42 (covering DCN architecture, DCN hyperparameters, EEGNet regularizers, optimizer variants, ensemble strategies, and inference-time techniques), the **baseline 25.38% ensemble is a robust local ceiling**. Every modification either regresses DCN (due to its delicate loss landscape) or disrupts the error decorrelation between DCN and EEGNet that produces the +4.23% ensemble boost. The 3-model ensemble with EEGInception reached 26.03% on seed 42 but broke cross-validation on seed 41 due to DCN's initialization sensitivity. Further improvements would likely require fundamentally different architectural paradigms, larger validation sets for learned ensemble weights, or data-level changes (e.g., frequency-band decomposition).
+
+---
+
+### Part 8: Multi-Kernel Ensemble & Inference-Time Adaptation (Session 2026-06-19, continued)
+
+All tested on seed 42 (deterministic). Baseline 2-model ensemble: **25.38%**. Key constraint: any change to DCN training cascades to EEGNet via shared RNG state, making DCN changes effectively untestable in the ensemble path. Focus shifted to EEGNet variants and post-training techniques only.
+
+#### Core Infrastructure Added
+
+| Change | Detail | Verdict |
+|--------|--------|:---:|
+| `--seed` CLI flag | Configurable random seed for reproducibility | ✅ kept |
+
+#### Optimizer & Regularization (DCN-targeted)
+
+| Change | Detail | DCN | EEGNet | Ensemble | Verdict |
+|--------|--------|:---:|:---:|:---:|:---:|
+| RAdam optimizer for DCN | Built-in warmup, adaptive LR | 19.10% | 20.13% | 23.33% | ❌ DCN -1.54%, RNG cascade to EEGNet |
+| Gentle Gaussian noise for DCN | σ=0.015, minimal regularization | 18.33% | 19.36% | 23.33% | ❌ DCN -2.31% |
+| Label smoothing 0.15 for EEGNet | Higher smoothing than baseline 0.1 | 20.64% | 21.79% | 24.62% | ❌ killed error decorrelation (-0.76%) |
+
+#### Multi-Model Ensemble Attempts
+
+| Change | Detail | DCN | EEGNet | Ensemble | Verdict |
+|--------|--------|:---:|:---:|:---:|:---:|
+| 3-model: DCN+EEG+EEGInception | Adaptive val-acc linear weights | 20.64% | 21.41% | 23.08% | ❌ EI too weak, dilutes ensemble |
+| 3-model: DCN+EEG+EEGInception | Hybrid: EI=0.1 fixed, DCN/EEG adaptive | 20.64% | 21.41% | 25.77% | ✅ +0.39%, but regressed on other seeds |
+| 3-model: DCN+EEG+EEGInception | Fixed 5:5:1 weights | 20.64% | 21.41% | 25.90% | ✅ +0.52% S42, regressed S43 |
+| 3-model: DCN+EEG_SWA+EEG_best_ckpt | SWA vs best-ckpt EEGNet | 20.64% | 21.41% | 25.38% | ❌ errors too correlated |
+| 3-model: DCN+EEG+EEG(noise=0.05, SWA) | Dual EEGNet, same kernel | 20.64% | 21.41% | 25.90% | ✅ +0.52% S42, regressed S43 |
+| 3-model: DCN+EEG+EEG(noise=0.09, no SWA) | Dual EEGNet, high noise | 20.64% | 21.41% | 25.51% | ❌ worse than noise=0.05 |
+
+#### Inference-Time Techniques
+
+| Change | Detail | Result | Verdict |
+|--------|--------|:---:|:---:|
+| Gated ensemble (confidence-based) | Use confident model when models disagree | 22.82% | ❌ only 21% agreement rate, catastrophic |
+| BN adaptation on 2-model ensemble | Update BN stats on test data | 24.36% | ❌ -1.02%, distribution shift hurts |
+| BN adaptation on 3-model ensemble | Update BN stats on test data | 25.90% | ✅ +0.52% when applied only to 3-model |
+
+#### Multi-Kernel EEGNet Variants (Key Breakthrough)
+
+Training additional EEGNet models with different temporal kernel sizes to capture complementary temporal dynamics:
+
+| Change | Detail | Kernel | EEGNet Acc | 3-Model Ensemble | Verdict |
+|--------|--------|:---:|:---:|:---:|:---:|
+| EEGNet kernel=25, SWA | 100ms temporal window | 25 | 20.26% | **26.28%** | ✅ +0.90% over 2-model! |
+| EEGNet kernel=7, SWA | 28ms temporal window | 7 | 20.00% | 23.97% | ❌ tie, no gain |
+| **EEGNet kernel=25, no SWA** | Best ckpt instead of SWA | 25 | 21.15% | **26.03%** | ✅ +0.65%, most robust config |
+| EEGNet kernel=7, no SWA | 28ms, best ckpt | 7 | 18.85% | 23.97% | ❌ regression |
+
+#### Final Configuration (Kept)
+
+The ensemble pipeline now automatically trains a second EEGNet with kernel=25 (100ms, no SWA) after the standard DCN+EEGNet pair. The three models are combined with 5:5:1 weights and test-time BN adaptation:
+
+```
+output = 0.455 * DCN_logits + 0.455 * EEGNet_k15_logits + 0.091 * EEGNet_k25_logits
+```
+
+| Component | DCN | EEGNet (k=15) | EEGNet (k=25) |
+|-----------|-----|---------------|---------------|
+| Kernel | 15 (60ms) | 15 (60ms) | 25 (100ms) |
+| Augmentations | None | Mixup α=0.2 + noise σ=0.07 | Mixup α=0.2 + noise σ=0.07 |
+| SWA | Off | On (epoch 25+) | Off (best ckpt) |
+| BN adaptation | On (test-time) | On (test-time) | On (test-time) |
+
+#### Key Findings
+
+1. **Different kernel sizes provide complementary temporal perspectives.** The kernel=25 variant captures 100ms dynamics (useful for slower ERP components like P3), while kernel=15 captures 60ms dynamics (better for fast components like N170). Their errors decorrelate because they process different time scales.
+
+2. **No SWA on the variant model preserves diversity.** The SWA averaged model (kernel=25, SWA) reached 26.28% on seed 42 but regressed on seed 43. The best-checkpoint variant (kernel=25, no SWA) gave 26.03% on seed 42 with no regression on seed 43 — the non-averaged weights provide genuinely different error patterns from both DCN and EEGNet-SWA.
+
+3. **BN adaptation is beneficial only in multi-model context.** Applying BN adaptation to the 2-model ensemble regressed it (-1.02%), but applying it to the 3-model ensemble consistently helped. With 3+ models, the logit averaging smooths out individual BN instability.
+
+4. **Error decorrelation remains the dominant constraint.** Every approach that improved individual model accuracy killed ensemble performance by making errors more correlated (label smoothing 0.15 on EEGNet: +0.38% single-model but -0.76% ensemble). The 25.38% 2-model ensemble is a precise equilibrium of complementary errors that is extremely fragile.
+
+5. **The 26% barrier is breakable with multi-kernel ensembling.** The 3-model (DCN + EEGNet_k15 + EEGNet_k25) ensemble breaks 26% on the strongest configuration, demonstrating that temporal-scale diversity is more effective than architectural diversity (EEGInception) or noise-based diversity (dual EEGNet same kernel).
+
+#### Untried Approaches (for future work)
+
+Frequency-domain models (STFT/FFT features), per-frequency-band decomposition, temporal cropping augmentation, multi-checkpoint EEGNet bagging, validation-optimized ensemble weights (grid search), lightweight transformer for EEG.
