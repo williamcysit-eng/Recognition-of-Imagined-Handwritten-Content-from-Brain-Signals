@@ -168,3 +168,79 @@ All novel approaches regressed. Contrastive pretraining learns instance-level fe
 | Scheduler | ReduceLROnPlateau | ReduceLROnPlateau |
 
 **Final: `python src/train.py --model ensemble` -> 25.38%** (seed 42, SWA default).
+
+---
+
+### Part 7: Post-Baseline Architectural & Hyperparameter Attempts (Session 2026-06-19)
+
+All tested on seed 42 (deterministic, seed 42). Baseline 2-model ensemble: **25.38%**.
+
+#### EEGInception Improvements
+
+| Change | Result | Verdict |
+|--------|:---:|:---:|
+| **Add Dropout before FC layer** | 17.56% (+0.89%) | ✅ improved |
+| + Gaussian noise σ=0.07 + SWA | 17.56% | Tie (no additional gain) |
+
+#### 3-Model Ensemble (DCN + EEGNet + EEGInception)
+
+| Weight Strategy | Seed 42 Ensemble | Verdict |
+|--------|:---:|:---:|
+| Equal weight (1:1:1) | 22.56% | ❌ dilutes strong pair |
+| Fixed 5:5:1 | **26.03% (+0.65%)** | ✅ seed 42 only |
+| Fixed 5:5:1 on seed 41 | 22.95% (-0.90%) | ❌ regression |
+| Fixed 5:5:1 on seed 43 | 24.23% (+0.26%) | ✅ |
+| Val-acc squared weights | 24.10% | ❌ |
+| Logistic regression stacking | 14.36% | ❌ catastrophic overfit |
+
+**Conclusion:** 3-model ensemble works only when weights are right. Validation set (780 samples) too small for reliable weight learning. Fixed 5:5:1 regresses on seed 41 when DCN is weak (17.69%).
+
+#### DeepConvNet Modifications
+
+| Change | DCN Acc | Verdict |
+|--------|:---:|:---:|
+| SE channel attention blocks | 10.51% | ❌ catastrophic overfit |
+| Time shift augmentation (±10 samples) | Degraded | ❌ disrupts clean signal |
+| Label smoothing 0.05 | 19.49% | ❌ -1.15% |
+| Channel dropout (3/24 ch) | 18.46% | ❌ -2.18% |
+
+#### Hyperparameter Tuning
+
+| Change | Ensemble | Verdict |
+|--------|:---:|:---:|
+| Scheduler patience 3→5 | 24.87% | ❌ -0.51% (hurt EEGNet) |
+| SnapBack overfitting recovery | 25.26% max | ❌ couldn't match 25.38% |
+
+#### Key Insight
+
+DCN at 20.64% is at a delicate local optimum. Every architectural change, augmentation, or hyperparameter tweak regresses it. DCN's seed sensitivity (17.69% → 20.64% → 20.26%) is the primary bottleneck. EEGNet+SWA is robust (21.41%–21.79%).
+
+#### Untried Optimizer Approaches
+
+SGD+Nesterov, CosineAnnealingWarmRestarts, OneCycleLR all tested and failed. Gradient clipping, EMA, and separate WD also failed. **Not yet tested: SAM (Sharpness-Aware Minimization), RAdam, Lookahead, Lion.**
+
+#### Additional Optimizer & Architecture Experiments (Session 2026-06-19, continued)
+
+| Change | Detail | DCN | EEGNet | Ensemble | Verdict |
+|--------|--------|:---:|:---:|:---:|:---:|
+| SAM (Sharpness-Aware Minimization) | rho=0.05, DCN only | 17.56% | 20.77% | 24.10% | ❌ DCN -3.08% |
+| Weight decay 0.06 | DCN only, 250Hz | 19.62% | 21.41% | 24.62% | ❌ DCN -1.02% |
+| Per-channel learnable scale | 24 trainable params, DCN | 18.59% | 18.97% | 22.69% | ❌ DCN -2.05% |
+| Focal loss γ=2.0 | DCN only, non-Mixup path | 17.95% | 23.72% | 24.87% | ❌ DCN -2.69% |
+| SWA on DCN only (asym. reversed) | start_epoch=15, no SWA on EEGNet | 21.03% | 19.49% | 23.46% | ❌ EEGNet -1.92% |
+| LR warmup 5 epochs | DCN only, linear 0→0.005 | 20.26% | 17.44% | 22.18% | ❌ EEGNet -3.97% |
+| DCN patience 40→60 | extra 20 epochs before stop | 20.64% | 21.41% | 24.23% | ❌ Ensemble -1.15% |
+| EEGNet noise σ=0.09 | stronger augmentation | 20.64% | 21.79% | 24.23% | ❌ kills diversity |
+| EEGNet noise σ=0.05 | weaker augmentation | 20.64% | 20.00% | 24.10% | ❌ EEGNet -1.41% |
+
+#### Inference-Time Attempts
+
+| Change | Detail | Result | Verdict |
+|--------|--------|:---:|:---:|
+| Temperature calibration | T_dcn=1.4, T_eeg=0.8 from val | 22.95% | ❌ -1.92% vs no-calib |
+| Test-time augmentation (TTA) | ±1–10 sample shifts | 24.62%→18.85% | ❌ models temporally tuned |
+| 2-model stacking (val learned weights) | logistic regression meta-learner | 21.79% | ❌ overfit 780-sample val |
+
+#### Key Conclusion
+
+After **18 distinct approaches** tested on seed 42 (covering DCN architecture, DCN hyperparameters, EEGNet regularizers, optimizer variants, ensemble strategies, and inference-time techniques), the **baseline 25.38% ensemble is a robust local ceiling**. Every modification either regresses DCN (due to its delicate loss landscape) or disrupts the error decorrelation between DCN and EEGNet that produces the +4.23% ensemble boost. The 3-model ensemble with EEGInception reached 26.03% on seed 42 but broke cross-validation on seed 41 due to DCN's initialization sensitivity. Further improvements would likely require fundamentally different architectural paradigms, larger validation sets for learned ensemble weights, or data-level changes (e.g., frequency-band decomposition).
