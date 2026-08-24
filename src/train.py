@@ -116,7 +116,9 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
                               use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
                               use_swa=False, swa_start_epoch=30,
                               force_cpu=False, quick_epochs=0,
-                              cpu_threads=None):
+                              cpu_threads=None, early_stopping_patience=40,
+                              channel_dropout=0.0, time_mask_samples=0,
+                              amplitude_jitter=0.0):
     """
     Trains a deep learning model with validation-based checkpointing.
     """
@@ -196,7 +198,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     best_epoch = 1
     
     # Early Stopping config
-    patience = 40
+    patience = early_stopping_patience
     epochs_no_improve = 0
     
     # SWA tracking
@@ -230,6 +232,24 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
             # Gaussian noise augmentation for EEG signals
             if noise_std > 0:
                 batch_x = batch_x + torch.randn_like(batch_x) * noise_std
+
+            if amplitude_jitter > 0:
+                scale = 1 + (2 * torch.rand(batch_x.size(0), 1, batch_x.size(2), 1,
+                                            device=device) - 1) * amplitude_jitter
+                batch_x = batch_x * scale
+
+            if channel_dropout > 0:
+                keep = (torch.rand(batch_x.size(0), 1, batch_x.size(2), 1,
+                                   device=device) >= channel_dropout).to(batch_x.dtype)
+                batch_x = batch_x * keep / max(1e-6, 1 - channel_dropout)
+
+            if time_mask_samples > 0 and time_mask_samples < batch_x.size(-1):
+                starts = torch.randint(0, batch_x.size(-1) - time_mask_samples + 1,
+                                       (batch_x.size(0),), device=device)
+                positions = torch.arange(batch_x.size(-1), device=device).view(1, 1, 1, -1)
+                mask = (positions < starts.view(-1, 1, 1, 1)) | (
+                    positions >= (starts + time_mask_samples).view(-1, 1, 1, 1))
+                batch_x = batch_x * mask
             
             optimizer.zero_grad(set_to_none=True)
             

@@ -1,0 +1,24 @@
+experiment,validation_or_oof_accuracy,test_accuracy,selected,summary
+logistic_regression,,13.72,no,Original linear baseline
+deepconvnet_full,14.87,18.46,no,Reproduced full-window baseline
+eegnet_k15_swa,,21.54,yes,Strong original single model
+eegnet_k25,18.46,18.72,yes,Longer temporal-scale ensemble member
+original_three_model_ensemble,,23.21,no,Reproduced original ensemble
+fixed_graph_extended_ensemble,23.33,24.36,no,Best non-OOF ensemble
+erp_prototype_trial_channel_cosine,10.13,11.28,no,Class-average ERP correlation
+euclidean_aligned_window_dcn,17.05,20.51,no,Improved standalone test but zero fixed-ensemble weight
+multi_window_eegnet,16.15,18.85,no,Three cognitive-stage branches
+dynamic_graph_eegnet,15.51,17.18,no,Trial-specific graph overfit
+augmented_window_dcn,16.67,19.10,no,Channel dropout plus temporal mask and jitter
+confusion_pair_second_stage,26.15,24.36,no,No correction beat the base on held-out half-validation
+masked_encoder_scratch,6.67,,no,Control for self-supervised encoder
+masked_encoder_pretrained,9.87,,no,Pretraining improved transfer by 3.20 points
+oof_window_dcn,15.58,20.90,yes,Five chronological folds
+oof_eegnet_k25,13.35,21.41,yes,Five chronological folds
+oof_eegnet_k15_swa,15.33,23.46,yes,Five chronological folds
+oof_graph_eegnet,13.06,21.03,yes,Five chronological folds
+oof_aligned_dcn,14.87,23.85,yes,Five aligned chronological folds
+oof_dcn_k25_two_arch,17.88,27.18,no,First leakage-free OOF improvement
+oof_four_architecture,18.69,27.56,no,DCN plus k25 plus k15-SWA plus graph
+oof_nested_probability_stacking,18.08,26.54,no,Nested regularized meta-classifier
+oof_final_five_architecture,18.72,27.56,yes,Final weights 5:1:5:8:1

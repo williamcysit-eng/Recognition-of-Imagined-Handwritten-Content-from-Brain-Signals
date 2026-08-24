@@ -1,9 +1,46 @@
+# Python environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+
+# EEG datasets (large and/or private)
+data/raw/*.mat
+data/processed/*.npz
+*.mat
 eeg_dataset.npz
 data_EEG_AI.mat
-*.mat
+
+# Model checkpoints and generated experiment artifacts
 *.pth
-*.pyc
-__pycache__/
+*.pt
+*.ckpt
 outputs/
-REFERENCE PAPER.pdf
+runs/
+logs/
+wandb/
+
+# IDE and operating-system files
 .vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Locally stored reference material
+REFERENCE PAPER.pdf
