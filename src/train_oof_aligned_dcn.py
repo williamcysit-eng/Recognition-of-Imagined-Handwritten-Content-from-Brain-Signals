@@ -10,7 +10,7 @@ if ROOT not in sys.path:sys.path.append(ROOT)
 
 from models import DeepConvNet
 from src.run_utils import guard_output,prepare_run_dir,save_torch_state
-from src.train import set_seed,train_deep_learning_model
+from src.train import set_seed,train_deep_learning_model, select_device
 from src.train_oof_dcn import make_oof_splits,predict
 
 
@@ -33,7 +33,7 @@ def main():
     p.add_argument('--cpu',action='store_true');p.add_argument('--data-path',default=os.path.join(ROOT,'data','processed','eeg_dataset.npz'))
     p.add_argument('--output-root');p.add_argument('--run-id');p.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));args=p.parse_args()
     arc=np.load(args.data_path);data=arc['data'].astype('float32')[:,:,50:551];labels=arc['labels_0indexed']
-    splits,test=make_oof_splits(labels,5);device=torch.device('cpu' if args.cpu or not torch.cuda.is_available() else 'cuda')
+    splits,test=make_oof_splits(labels,5);device=select_device(args.cpu)
     if args.output_root:checkpoint_root=args.output_root
     else:
         run_dir=prepare_run_dir('oof-aligned-dcn',args.run_id,args.runs_root,args.force);checkpoint_root=os.path.join(run_dir,'checkpoints');print(f'Run directory: {run_dir}')

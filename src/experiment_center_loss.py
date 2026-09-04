@@ -6,7 +6,7 @@ ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)));sys.path.append
 from models import EEGNet82
 from src.extract import EEGDataset
 from src.run_utils import guard_output,prepare_run_dir
-from src.train import load_and_split_data_pipeline,set_seed
+from src.train import load_and_split_data_pipeline,set_seed, select_device
 
 def evaluate(m,l,d):
     m.eval();s=c=n=0
@@ -15,7 +15,7 @@ def evaluate(m,l,d):
     return s/n,100*c/n
 def main():
     p=argparse.ArgumentParser();p.add_argument('--run-id');p.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));p.add_argument('--force',action='store_true');a=p.parse_args();run_dir=prepare_run_dir('experiment-center-loss',a.run_id,a.runs_root,a.force);print(f'Run directory: {run_dir}')
-    set_seed(42);d=torch.device('cuda' if torch.cuda.is_available() else 'cpu');tr,ty,va,vy,_,_,_,_=load_and_split_data_pipeline(os.path.join(ROOT,'data','processed','eeg_dataset.npz'));tl=DataLoader(EEGDataset(tr,ty),64,shuffle=True);vl=DataLoader(EEGDataset(va,vy),128)
+    set_seed(42);d=select_device();tr,ty,va,vy,_,_,_,_=load_and_split_data_pipeline(os.path.join(ROOT,'data','processed','eeg_dataset.npz'));tl=DataLoader(EEGDataset(tr,ty),64,shuffle=True);vl=DataLoader(EEGDataset(va,vy),128)
     m=EEGNet82(24,26,input_time_points=801,temporal_kernel_length=15,dropout_rate=.3).to(d);centers=nn.Parameter(torch.randn(26,128,device=d)*.02);opt=torch.optim.AdamW(list(m.parameters())+[centers],lr=.003,weight_decay=.03);sched=torch.optim.lr_scheduler.ReduceLROnPlateau(opt,factor=.5,patience=3,min_lr=1e-5);best=(1e9,0);stale=0;path=os.path.join(run_dir,'checkpoints','eegnet_center_loss_seed42.pth');guard_output(path,force=a.force)
     for e in range(1,90):
         t=time.time();m.train()

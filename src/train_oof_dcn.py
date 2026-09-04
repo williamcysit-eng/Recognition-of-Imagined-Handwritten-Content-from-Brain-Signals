@@ -13,7 +13,7 @@ if ROOT not in sys.path:
 from models import DeepConvNet
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir, save_torch_state
-from src.train import load_and_split_data_pipeline, set_seed, train_deep_learning_model
+from src.train import load_and_split_data_pipeline, set_seed, train_deep_learning_model, select_device
 
 
 def make_oof_splits(labels, folds=5):
@@ -70,7 +70,7 @@ def main():
     data = archive["data"].astype(np.float32)[:, :, 50:551]  # 0..2000 ms
     labels = archive["labels_0indexed"]
     splits, test_idx = make_oof_splits(labels, args.folds)
-    device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
+    device = select_device(args.cpu)
     if args.output_root:
         checkpoint_root = args.output_root
     else:

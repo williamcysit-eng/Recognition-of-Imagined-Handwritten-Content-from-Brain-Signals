@@ -2,13 +2,13 @@ import argparse,os,sys
 import numpy as np,torch
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)));sys.path.append(ROOT) if ROOT not in sys.path else None
 from models import DeepConvNet
-from src.train import set_seed,train_deep_learning_model
+from src.train import set_seed,train_deep_learning_model, select_device
 from src.train_oof_dcn import make_oof_splits,predict
 from src.run_utils import guard_output,prepare_run_dir,save_torch_state
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--run-id');p.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));p.add_argument('--force',action='store_true');p.add_argument('--oof-checkpoint-root',default=os.path.join(ROOT,'models','checkpoints'));args=p.parse_args();run_dir=prepare_run_dir('experiment-walk-forward',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
-    a=np.load(os.path.join(ROOT,'data','processed','eeg_dataset.npz'));x=a['data'].astype('float32')[:,:,50:551];y=a['labels_0indexed'];splits,test=make_oof_splits(y,5);blocks=[v for _,v in splits];d=torch.device('cuda' if torch.cuda.is_available() else 'cpu');outdir=os.path.join(run_dir,'checkpoints','walk_forward_dcn');os.makedirs(outdir,exist_ok=True);correct=total=0;last=None
+    a=np.load(os.path.join(ROOT,'data','processed','eeg_dataset.npz'));x=a['data'].astype('float32')[:,:,50:551];y=a['labels_0indexed'];splits,test=make_oof_splits(y,5);blocks=[v for _,v in splits];d=select_device();outdir=os.path.join(run_dir,'checkpoints','walk_forward_dcn');os.makedirs(outdir,exist_ok=True);correct=total=0;last=None
     for stage in range(1,5):
         train=np.concatenate(blocks[:stage]);val=blocks[stage];path=os.path.join(outdir,f'stage_{stage}_seed_{742+stage}.pth');print(f'\nSTAGE {stage}: train_blocks=0..{stage-1} validate_block={stage}',flush=True)
         if stage==4:

@@ -20,6 +20,7 @@ from src.checkpoint_manifest import (
     BEST_HYBRID_WEIGHTS,
 )
 from src.extract import EEGDataset
+from src.train import select_device
 from src.train_oof_aligned_dcn import align
 
 
@@ -65,7 +66,7 @@ def evaluate_hybrid(cache_path, checkpoint_root, data_path, *, force_cpu=False):
     labels = archive["labels_0indexed"]
     test = np.concatenate([np.flatnonzero(labels == label)[270:] for label in range(26)])
     raw = data[test, :, 50:551]
-    device = torch.device("cpu" if force_cpu or not torch.cuda.is_available() else "cuda")
+    device = select_device(force_cpu)
     refit_root = Path(checkpoint_root) / "full_refit"
 
     full = torch.zeros_like(oof)

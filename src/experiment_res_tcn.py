@@ -17,7 +17,7 @@ from models.shallow_conv_net import ShallowConvNet
 from models.filter_bank_net import FilterBankNet
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir
-from src.train import load_and_split_data_pipeline, set_seed
+from src.train import load_and_split_data_pipeline, set_seed, select_device
 
 
 def normalize(train, val, test, mode):
@@ -64,7 +64,7 @@ def main():
     args = parser.parse_args()
     run_dir=prepare_run_dir(f'experiment-{args.model}',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
     set_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
 
     path = os.path.join(ROOT, "data", "processed", "eeg_dataset.npz")
     train_x, train_y, val_x, val_y, test_x, test_y, _, _ = load_and_split_data_pipeline(path)

@@ -6,7 +6,7 @@ ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)));sys.path.append
 from models import MaskedEEGAutoencoder,EEGEncoder,PretrainedEEGClassifier
 from src.extract import EEGDataset
 from src.run_utils import prepare_run_dir,write_json
-from src.train import load_and_split_data_pipeline,set_seed
+from src.train import load_and_split_data_pipeline,set_seed, select_device
 
 def mask_input(x):
     masked=x.clone();mask=torch.rand(x.size(0),1,x.size(2),1,device=x.device)<.15;starts=torch.randint(0,x.size(-1)-50,(x.size(0),),device=x.device);p=torch.arange(x.size(-1),device=x.device).view(1,1,1,-1);mask=mask.expand_as(x)|(((p>=starts[:,None,None,None])&(p<(starts+50)[:,None,None,None])).expand_as(x));masked[mask]=0;return masked,mask
@@ -17,7 +17,7 @@ def evaluate(m,l,d):
     return s/n,100*c/n
 def main():
     p=argparse.ArgumentParser();p.add_argument('--run-id');p.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));p.add_argument('--force',action='store_true');a=p.parse_args();run_dir=prepare_run_dir('experiment-latent-pretrain',a.run_id,a.runs_root,a.force);print(f'Run directory: {run_dir}')
-    set_seed(42);d=torch.device('cuda' if torch.cuda.is_available() else 'cpu');tr,ty,va,vy,_,_,_,_=load_and_split_data_pipeline(os.path.join(ROOT,'data','processed','eeg_dataset.npz'));tr,va=(x[:,:,50:551].astype('float32') for x in (tr,va));mu=tr.mean((0,2),keepdims=True);sd=tr.std((0,2),keepdims=True)+1e-6;tr=(tr-mu)/sd;va=(va-mu)/sd;tl=DataLoader(EEGDataset(tr,ty),64,shuffle=True);vl=DataLoader(EEGDataset(va,vy),128)
+    set_seed(42);d=select_device();tr,ty,va,vy,_,_,_,_=load_and_split_data_pipeline(os.path.join(ROOT,'data','processed','eeg_dataset.npz'));tr,va=(x[:,:,50:551].astype('float32') for x in (tr,va));mu=tr.mean((0,2),keepdims=True);sd=tr.std((0,2),keepdims=True)+1e-6;tr=(tr-mu)/sd;va=(va-mu)/sd;tl=DataLoader(EEGDataset(tr,ty),64,shuffle=True);vl=DataLoader(EEGDataset(va,vy),128)
     ae=MaskedEEGAutoencoder().to(d);opt=torch.optim.AdamW(ae.parameters(),lr=1e-3,weight_decay=.01)
     for e in range(1,16):
         ae.train();total=0

@@ -51,6 +51,17 @@ def set_seed(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
+def select_device(force_cpu=False):
+    """Choose CUDA, then Apple Metal, with CPU as the portable fallback."""
+    if force_cpu:
+        return torch.device("cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 set_seed(42)
 
 # -----------------------------------------------------------------------------
@@ -129,9 +140,7 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     """
     if quick_epochs > 0:
         num_epochs = quick_epochs
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if force_cpu:
-        device = torch.device("cpu")
+    device = select_device(force_cpu)
     is_cpu = device.type == "cpu"
     print(f"\nInitializing {model_type.upper()} on device: {device}")
     

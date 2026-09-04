@@ -15,7 +15,7 @@ if ROOT not in sys.path:
 from models.eeg_conformer import EEGConformer
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir
-from src.train import load_and_split_data_pipeline, set_seed
+from src.train import load_and_split_data_pipeline, set_seed, select_device
 
 
 def evaluate(model, loader, device):
@@ -42,7 +42,7 @@ def main():
     args = parser.parse_args()
     run_dir=prepare_run_dir('experiment-conformer',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
     set_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     path = os.path.join(ROOT, "data", "processed", "eeg_dataset.npz")
     train_x, train_y, val_x, val_y, test_x, test_y, _, _ = load_and_split_data_pipeline(path)
     train_x, val_x, test_x = (x[:, :, 50:551].astype(np.float32)

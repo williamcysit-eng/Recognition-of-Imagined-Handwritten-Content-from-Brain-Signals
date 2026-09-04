@@ -17,6 +17,7 @@ from models import DeepConvNet, EEGNet82, GraphEEGNet
 from src.checkpoint_manifest import BEST_HYBRID_ARCHITECTURES
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir
+from src.train import select_device
 from src.train_oof_aligned_dcn import align
 from src.train_oof_dcn import make_oof_splits
 
@@ -79,7 +80,7 @@ def evaluate_oof(
     data = archive["data"].astype(np.float32)
     labels = archive["labels_0indexed"]
     splits, test_idx = make_oof_splits(labels, folds)
-    device = torch.device("cpu" if force_cpu or not torch.cuda.is_available() else "cuda")
+    device = select_device(force_cpu)
 
     oof = [[] for _ in NAMES]
     tests = [[] for _ in NAMES]

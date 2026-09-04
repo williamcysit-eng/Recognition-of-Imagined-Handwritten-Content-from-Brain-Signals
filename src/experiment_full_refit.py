@@ -23,13 +23,13 @@ from src.checkpoint_manifest import (
 )
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir, save_torch_state
-from src.train import set_seed
+from src.train import set_seed, select_device
 from src.train_oof_aligned_dcn import align
 
 
 def train_model(model, x, y, epochs, seed, *, eeg=False, swa=False, force_cpu=False):
     set_seed(seed)
-    device = torch.device("cpu" if force_cpu or not torch.cuda.is_available() else "cuda")
+    device = select_device(force_cpu)
     model = model.to(device)
     loader = DataLoader(EEGDataset(x, y), 64, shuffle=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.005, weight_decay=0.05)
@@ -91,7 +91,7 @@ def predict(model, x, y):
 
 def train_graph_model(x, y, epochs, seed, *, force_cpu=False):
     set_seed(seed)
-    device = torch.device("cpu" if force_cpu or not torch.cuda.is_available() else "cuda")
+    device = select_device(force_cpu)
     model = GraphEEGNet().to(device)
     loader = DataLoader(EEGDataset(x, y), 64, shuffle=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.002, weight_decay=0.03)

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from .eegnet import AdaptiveTemporalAvgPool2d
+
 
 class WindowBranch(nn.Module):
     def __init__(self, channels=24, filters=16, dropout=0.35):
@@ -18,7 +20,7 @@ class WindowBranch(nn.Module):
             nn.Conv2d(filters * 2, filters * 2, 1, bias=False),
             nn.BatchNorm2d(filters * 2),
             nn.ELU(),
-            nn.AdaptiveAvgPool2d((1, 8)),
+            AdaptiveTemporalAvgPool2d(8),
         )
 
     def forward(self, x):

@@ -1,6 +1,41 @@
 import torch
 import torch.nn as nn
 
+class AdaptiveTemporalAvgPool2d(nn.Module):
+    """Adaptive temporal averaging implemented with a fixed linear projection."""
+
+    def __init__(self, output_width):
+        super().__init__()
+        if output_width <= 0:
+            raise ValueError("output_width must be positive")
+        self.output_width = int(output_width)
+        self.register_buffer("_weights", torch.empty(0), persistent=False)
+
+    def _build_weights(self, input_width, dtype, device):
+        weights = torch.zeros(
+            self.output_width,
+            input_width,
+            dtype=dtype,
+        )
+        for index in range(self.output_width):
+            start = index * input_width // self.output_width
+            stop = ((index + 1) * input_width + self.output_width - 1) // self.output_width
+            weights[index, start:stop] = 1.0 / (stop - start)
+        return weights.to(device=device)
+
+    def forward(self, x):
+        input_width = x.shape[-1]
+        expected_shape = (self.output_width, input_width)
+        if (
+            self._weights.shape != expected_shape
+            or self._weights.dtype != x.dtype
+            or self._weights.device != x.device
+        ):
+            self._weights = self._build_weights(input_width, x.dtype, x.device)
+        pooled = torch.matmul(x.mean(dim=-2), self._weights.t())
+        return pooled.unsqueeze(-2)
+
+
 class CBAM_EEG(nn.Module):
     """
     Temporal-Spectral (CBAM-EEG) Attention Block.
@@ -130,7 +165,7 @@ class EEGNet82(nn.Module):
             nn.Conv2d(F1 * D, F2, kernel_size=(1, 1), bias=False),
             nn.BatchNorm2d(F2),
             nn.ELU(),
-            nn.AdaptiveAvgPool2d((1, 16)),  # Retain more temporal bins for classification
+            AdaptiveTemporalAvgPool2d(16),  # Retain more temporal bins for classification
             nn.Dropout(dropout_rate)
         )
         

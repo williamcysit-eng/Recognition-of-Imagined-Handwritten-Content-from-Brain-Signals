@@ -6,7 +6,7 @@ ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)));sys.path.append
 from models.masked_eeg_encoder import MaskedEEGAutoencoder,PretrainedEEGClassifier
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir
-from src.train import load_and_split_data_pipeline,set_seed
+from src.train import load_and_split_data_pipeline,set_seed, select_device
 
 def evaluate(m,l,d):
     m.eval();loss=nn.CrossEntropyLoss();s=c=n=0
@@ -15,7 +15,7 @@ def evaluate(m,l,d):
     return s/n,100*c/n
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--pretrain-epochs',type=int,default=25);p.add_argument('--finetune-epochs',type=int,default=80);p.add_argument('--seed',type=int,default=42);p.add_argument('--test',action='store_true');p.add_argument('--run-id');p.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));p.add_argument('--force',action='store_true');a=p.parse_args();set_seed(a.seed);d=torch.device('cuda' if torch.cuda.is_available() else 'cpu');run_dir=prepare_run_dir('experiment-masked-pretrain',a.run_id,a.runs_root,a.force);print(f'Run directory: {run_dir}')
+    p=argparse.ArgumentParser();p.add_argument('--pretrain-epochs',type=int,default=25);p.add_argument('--finetune-epochs',type=int,default=80);p.add_argument('--seed',type=int,default=42);p.add_argument('--test',action='store_true');p.add_argument('--run-id');p.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));p.add_argument('--force',action='store_true');a=p.parse_args();set_seed(a.seed);d=select_device();run_dir=prepare_run_dir('experiment-masked-pretrain',a.run_id,a.runs_root,a.force);print(f'Run directory: {run_dir}')
     tr,ty,va,vy,te,tey,_,_=load_and_split_data_pipeline(os.path.join(ROOT,'data','processed','eeg_dataset.npz'));tr,va,te=(x[:,:,50:551].astype('float32') for x in (tr,va,te));mu=tr.mean((0,2),keepdims=True);sd=tr.std((0,2),keepdims=True)+1e-6;tr,va,te=((x-mu)/sd for x in (tr,va,te))
     tl=DataLoader(EEGDataset(tr,ty),64,shuffle=True);vl=DataLoader(EEGDataset(va,vy),128);tel=DataLoader(EEGDataset(te,tey),128)
     ae=MaskedEEGAutoencoder().to(d);opt=torch.optim.AdamW(ae.parameters(),lr=1e-3,weight_decay=.01)

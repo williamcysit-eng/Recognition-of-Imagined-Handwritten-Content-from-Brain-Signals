@@ -13,7 +13,7 @@ if ROOT not in sys.path:
 from models import EEGNet82
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir, save_torch_state
-from src.train import set_seed, train_deep_learning_model
+from src.train import set_seed, train_deep_learning_model, select_device
 from src.train_oof_dcn import make_oof_splits
 
 
@@ -48,7 +48,7 @@ def main():
     args = parser.parse_args()
     archive=np.load(args.data_path)
     data=archive['data'].astype(np.float32);labels=archive['labels_0indexed']
-    splits,test_idx=make_oof_splits(labels,args.folds);device=torch.device('cpu' if args.cpu or not torch.cuda.is_available() else 'cuda')
+    splits,test_idx=make_oof_splits(labels,args.folds);device=select_device(args.cpu)
     suffix=f'oof_eegnet_k{args.kernel}' + ('_swa' if args.swa else '')
     if args.output_root:checkpoint_root=args.output_root
     else:

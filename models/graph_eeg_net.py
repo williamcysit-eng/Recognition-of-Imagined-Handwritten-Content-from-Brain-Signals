@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from .eegnet import AdaptiveTemporalAvgPool2d
+
 
 def electrode_graph(k=4):
     # Approximate 2-D 10-20 scalp positions in the dataset's channel order.
@@ -64,7 +66,7 @@ class GraphEEGNet(nn.Module):
             nn.Conv2d(64, 64, 1, bias=False),
             nn.BatchNorm2d(64),
             nn.ELU(),
-            nn.AdaptiveAvgPool2d((1, 16)),
+            AdaptiveTemporalAvgPool2d(16),
         )
         self.head = nn.Sequential(
             nn.Flatten(), nn.Linear(64 * 16, 128), nn.ELU(),

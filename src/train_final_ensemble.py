@@ -25,7 +25,7 @@ from models import GraphEEGNet
 from src.evaluate_deep_ensemble import accuracy, load_models
 from src.extract import EEGDataset
 from src.run_utils import base_manifest, guard_output, prepare_run_dir, save_torch_state, write_json
-from src.train import load_and_split_data_pipeline, set_seed, train_deep_learning_model
+from src.train import load_and_split_data_pipeline, set_seed, train_deep_learning_model, select_device
 
 
 CHECKPOINT_DIR = None
@@ -81,7 +81,7 @@ def evaluate_graph(model, loader, device):
 
 def train_graph(train_x, train_y, val_x, val_y, output, epochs, quick, force=False):
     set_seed(42)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     train_window = train_x[:, :, 50:551].astype(np.float32)
     val_window = val_x[:, :, 50:551].astype(np.float32)
     train_loader = DataLoader(EEGDataset(train_window, train_y), 64, shuffle=True)
@@ -183,7 +183,7 @@ def main():
             guard_output(path, force=args.force)
             trainer(path)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     models = load_models(device, CHECKPOINT_DIR)
     print(f"\n{'=' * 72}\nFINAL FIXED ENSEMBLE\n{'=' * 72}")
     print("Models:", ", ".join(f"{name}={weight}" for name, weight, _, _ in models))

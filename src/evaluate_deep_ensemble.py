@@ -12,7 +12,7 @@ if ROOT not in sys.path:
 from models import DeepConvNet, EEGNet82, GraphEEGNet
 from src.checkpoint_manifest import LEGACY_FIVE_MODEL_CHECKPOINTS
 from src.extract import EEGDataset
-from src.train import load_and_split_data_pipeline
+from src.train import load_and_split_data_pipeline, select_device
 
 
 CHECKPOINTS = LEGACY_FIVE_MODEL_CHECKPOINTS
@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--data-path", default=os.path.join(ROOT, "data", "processed", "eeg_dataset.npz"))
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
-    device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
+    device = select_device(args.cpu)
     _, _, val_x, val_y, test_x, test_y, _, _ = load_and_split_data_pipeline(args.data_path)
     models = load_models(device, args.checkpoint_dir)
     print("Models:", ", ".join(f"{name}={weight}" for name, weight, _, _ in models))

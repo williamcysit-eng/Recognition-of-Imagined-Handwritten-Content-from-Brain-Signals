@@ -15,7 +15,7 @@ if ROOT not in sys.path:
 from models.graph_eeg_net import GraphEEGNet, DynamicGraphEEGNet, MultiScaleGraphEEGNet
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir
-from src.train import load_and_split_data_pipeline, set_seed
+from src.train import load_and_split_data_pipeline, set_seed, select_device
 
 
 def evaluate(model, loader, device):
@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--run-id");parser.add_argument("--runs-root",default=os.path.join(ROOT,"runs"));parser.add_argument("--force",action="store_true")
     args = parser.parse_args(); set_seed(args.seed)
     run_dir=prepare_run_dir('experiment-graph',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     path = os.path.join(ROOT, "data", "processed", "eeg_dataset.npz")
     tr, ty, va, vy, te, tey, _, _ = load_and_split_data_pipeline(path)
     tr, va, te = (x[:, :, 50:551].astype(np.float32) for x in (tr, va, te))

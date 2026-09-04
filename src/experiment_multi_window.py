@@ -14,7 +14,7 @@ if ROOT not in sys.path:
 from models.multi_window_eeg_net import MultiWindowEEGNet
 from src.extract import EEGDataset
 from src.run_utils import guard_output, prepare_run_dir
-from src.train import load_and_split_data_pipeline, set_seed
+from src.train import load_and_split_data_pipeline, set_seed, select_device
 
 
 def evaluate(model, loader, device):
@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser(); parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42); parser.add_argument('--test', action='store_true')
     parser.add_argument('--run-id');parser.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));parser.add_argument('--force',action='store_true')
-    args = parser.parse_args(); set_seed(args.seed); device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    args = parser.parse_args(); set_seed(args.seed); device=select_device()
     run_dir=prepare_run_dir('experiment-multi-window',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
     tr,ty,va,vy,te,tey,_,_=load_and_split_data_pipeline(os.path.join(ROOT,'data','processed','eeg_dataset.npz'))
     loaders=[DataLoader(EEGDataset(x,y),64 if i==0 else 128,shuffle=i==0)

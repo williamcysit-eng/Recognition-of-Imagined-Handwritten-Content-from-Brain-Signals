@@ -32,6 +32,9 @@ Every training command writes to an isolated `runs/<run-id>/` directory. Existin
 run outputs are never overwritten by default. Choose a new run ID, or explicitly
 pass `--force` if replacement is intentional.
 
+CUDA is preferred when available. Supported Apple Silicon Macs automatically use
+Metal (MPS), with CPU as the portable fallback. Pass `--cpu` to force CPU execution.
+
 For a short, safe end-to-end smoke test:
 
 ```bash
@@ -473,9 +476,18 @@ python src/train.py --model ensemble --fast
 
 The trade-off: different cuDNN algorithms produce slightly different floating-point accumulation orders, which can shift the training trajectory. The ensemble accuracy is typically within ~0.5–1% of the deterministic default. This flag is recommended when iterating on hyperparameters or during development; the default deterministic path remains the gold standard for final reported results.
 
+### Apple Silicon: Metal (MPS)
+
+Supported Apple Silicon Macs automatically run training and evaluation on the
+integrated GPU through PyTorch MPS. The model's adaptive temporal pooling uses an
+equivalent linear projection because MPS does not support non-divisible adaptive
+average-pooling input sizes.
+
 ### CPU: Optimizations (Zero Accuracy Loss)
 
-Training on CPU is invoked automatically when CUDA is unavailable, or forced with `--cpu`. Several layers of optimization are applied that preserve identical numerical results to the GPU path:
+Training on CPU is invoked automatically when neither CUDA nor MPS is available,
+or forced with `--cpu`. Several layers of optimization preserve the same pipeline
+semantics:
 
 | Optimization | Mechanism | Speedup |
 |---|---|---|
