@@ -19,9 +19,10 @@ def electrode_graph(k=4):
         neighbours = np.argsort(distance[row])[1:k + 1]
         adjacency[row, neighbours] = np.exp(-distance[row, neighbours] ** 2 / 0.35)
     adjacency = np.maximum(adjacency, adjacency.T) + np.eye(len(coords), dtype=np.float32)
-    degree = adjacency.sum(1)
-    norm = np.diag(1.0 / np.sqrt(degree))
-    return torch.from_numpy((norm @ adjacency @ norm).astype(np.float32))
+    degree = adjacency.sum(axis=1)
+    inverse_sqrt_degree = degree ** -0.5
+    normalized = adjacency * inverse_sqrt_degree[:, None] * inverse_sqrt_degree[None, :]
+    return torch.from_numpy(normalized.astype(np.float32))
 
 
 class GraphTemporalBlock(nn.Module):
