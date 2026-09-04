@@ -144,11 +144,17 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
     is_cpu = device.type == "cpu"
     print(f"\nInitializing {model_type.upper()} on device: {device}")
     
+    use_mkldnn = is_cpu and torch.backends.mkldnn.is_available()
     if is_cpu:
-        torch.backends.mkldnn.enabled = True
-        num_threads = cpu_threads if cpu_threads is not None else (max(1, os.cpu_count() - 2) if os.cpu_count() else 4)
+        if cpu_threads is not None:
+            num_threads = cpu_threads
+        elif sys.platform == "darwin":
+            num_threads = torch.get_num_threads()
+        else:
+            num_threads = max(1, os.cpu_count() - 2) if os.cpu_count() else 4
         torch.set_num_threads(num_threads)
-        print(f"CPU optimizations: MKL-DNN enabled, {num_threads} threads")
+        backend = "MKL-DNN/channels-last" if use_mkldnn else "native/contiguous"
+        print(f"CPU backend: {backend}, {num_threads} threads")
     
     if use_mixup:
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
@@ -184,13 +190,15 @@ def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val,
 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
-    if is_cpu:
+    if use_mkldnn:
+        torch.backends.mkldnn.enabled = True
         model = model.to(memory_format=torch.channels_last)
     
     # Datasets and Loaders
     train_dataset = EEGDataset(X_train, y_train)
     val_dataset = EEGDataset(X_val, y_val)
-    dl_kwargs = dict(num_workers=2, persistent_workers=True) if is_cpu else {}
+    use_workers = is_cpu and sys.platform != "darwin"
+    dl_kwargs = dict(num_workers=2, persistent_workers=True) if use_workers else {}
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **dl_kwargs)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **dl_kwargs)
     
