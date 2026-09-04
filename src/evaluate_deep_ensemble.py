@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 
 import torch
 from torch.utils.data import DataLoader
@@ -9,22 +10,16 @@ if ROOT not in sys.path:
     sys.path.append(ROOT)
 
 from models import DeepConvNet, EEGNet82, GraphEEGNet
+from src.checkpoint_manifest import LEGACY_FIVE_MODEL_CHECKPOINTS
 from src.extract import EEGDataset
 from src.train import load_and_split_data_pipeline
 
 
-CHECKPOINTS = (
-    # name, weight, checkpoint, optional input time slice
-    ("eegnet_k25_seed42", 3, "best_eegnet_k25_seed42.pth", None),
-    ("eegnet_k15_swa_seed42", 1, "eegnet_k15_swa_seed42_standalone.pth", None),
-    ("eegnet_k15_swa_seed123", 2, "eegnet_k15_swa_seed123.pth", None),
-    ("dcn_window_0_2000", 2, "dcn_window_0_2000_seed42.pth", (50, 551)),
-    ("graph_eeg_seed42", 2, "graph_eeg_seed42.pth", (50, 551)),
-)
+CHECKPOINTS = LEGACY_FIVE_MODEL_CHECKPOINTS
 
 
-def load_models(device):
-    checkpoint_dir = os.path.join(ROOT, "models", "checkpoints")
+def load_models(device, checkpoint_dir=None):
+    checkpoint_dir = checkpoint_dir or os.path.join(ROOT, "models", "checkpoints")
     models = []
     for name, weight, filename, time_slice in CHECKPOINTS:
         if name.startswith("graph"):
@@ -37,7 +32,9 @@ def load_models(device):
             model = EEGNet82(24, 26, input_time_points=801,
                              temporal_kernel_length=kernel, dropout_rate=0.3)
         path = os.path.join(checkpoint_dir, filename)
-        model.load_state_dict(torch.load(path, map_location=device))
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Required checkpoint is missing: {path}")
+        model.load_state_dict(torch.load(path, map_location=device, weights_only=True))
         model.to(device).eval()
         models.append((name, weight, model, time_slice))
     return models
@@ -59,10 +56,14 @@ def accuracy(models, x, y, device):
 
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_path = os.path.join(ROOT, "data", "processed", "eeg_dataset.npz")
-    _, _, val_x, val_y, test_x, test_y, _, _ = load_and_split_data_pipeline(data_path)
-    models = load_models(device)
+    parser = argparse.ArgumentParser(description="Evaluate the historical fixed five-model ensemble")
+    parser.add_argument("--checkpoint-dir", default=os.path.join(ROOT, "models", "checkpoints"))
+    parser.add_argument("--data-path", default=os.path.join(ROOT, "data", "processed", "eeg_dataset.npz"))
+    parser.add_argument("--cpu", action="store_true")
+    args = parser.parse_args()
+    device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
+    _, _, val_x, val_y, test_x, test_y, _, _ = load_and_split_data_pipeline(args.data_path)
+    models = load_models(device, args.checkpoint_dir)
     print("Models:", ", ".join(f"{name}={weight}" for name, weight, _, _ in models))
     print(f"Validation accuracy: {accuracy(models, val_x, val_y, device):.2f}%")
     print(f"Test accuracy: {accuracy(models, test_x, test_y, device):.2f}%")

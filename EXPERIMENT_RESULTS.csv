@@ -21,4 +21,16 @@ oof_aligned_dcn,14.87,23.85,yes,Five aligned chronological folds
 oof_dcn_k25_two_arch,17.88,27.18,no,First leakage-free OOF improvement
 oof_four_architecture,18.69,27.56,no,DCN plus k25 plus k15-SWA plus graph
 oof_nested_probability_stacking,18.08,26.54,no,Nested regularized meta-classifier
-oof_final_five_architecture,18.72,27.56,yes,Final weights 5:1:5:8:1
+oof_final_five_architecture,18.72,27.56,no,Superseded single-seed weights 5:1:5:8:1
+oof_repeated_seed_five_architecture,19.13,28.33,yes,Two seeds for DCN and k15-SWA; weights 5:3:3:9:0
+classwise_constrained_oof,19.13,28.33,no,Nested selection reverted to global weights
+multiscale_fixed_graph,16.92,18.33,no,Local medium and global anatomical graphs
+latent_teacher_student_pretraining,12.44,,no,Improved over waveform reconstruction but below EEG CNNs
+eegnet_prototype_center_loss,14.36,,no,Angular class-center loss reduced generalization
+full_development_refit,,28.46,yes,OOF-selected architectures retrained on 270 trials per class
+recency_weighted_folds,,27.95,no,Fixed temporal weights 1:2:3:4:5 underperformed equal folds
+strict_walk_forward_dcn,10.13,15.51,no,Cumulative past-only training across chronological blocks
+hybrid_oof_full_refit,,29.10,yes,Fixed 50/50 normalized average; current best
+third_seed_k15_swa,14.69,23.85,no,Third seed reduced OOF bagging quality and was excluded
+three_seed_k15_bagging,16.35,25.13,no,Lower OOF than selected two-seed pair
+nonuniform_seed_weights,19.07,28.46,no,Per-architecture OOF weighting reduced joint-ensemble OOF

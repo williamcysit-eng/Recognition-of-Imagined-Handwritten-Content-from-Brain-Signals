@@ -16,6 +16,7 @@ from models.eeg_res_tcn import EEGResTCN
 from models.shallow_conv_net import ShallowConvNet
 from models.filter_bank_net import FilterBankNet
 from src.extract import EEGDataset
+from src.run_utils import guard_output, prepare_run_dir
 from src.train import load_and_split_data_pipeline, set_seed
 
 
@@ -59,7 +60,9 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test", action="store_true",
                         help="Evaluate the selected best checkpoint on the test split")
+    parser.add_argument("--run-id");parser.add_argument("--runs-root",default=os.path.join(ROOT,"runs"));parser.add_argument("--force",action="store_true")
     args = parser.parse_args()
+    run_dir=prepare_run_dir(f'experiment-{args.model}',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -81,8 +84,9 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.02)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
-    checkpoint = os.path.join(ROOT, "models", "checkpoints", f"best_{args.model}_{args.normalization}.pth")
+    checkpoint = os.path.join(run_dir, "checkpoints", f"best_{args.model}_{args.normalization}.pth")
     os.makedirs(os.path.dirname(checkpoint), exist_ok=True)
+    guard_output(checkpoint,force=args.force)
     best_loss = float("inf")
     stale = 0
     for epoch in range(1, args.epochs + 1):

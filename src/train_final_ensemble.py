@@ -1,12 +1,13 @@
-"""Train every checkpoint required by the final ensemble in one command.
+"""Train the historical fixed five-model, single-split ensemble.
 
-This script reproduces the final *method*. Exact accuracy can vary across complete
+The current best hybrid is trained by ``train_best_hybrid.py``. This script remains
+for the retained 24.36% experiment. Exact accuracy can vary across complete
 retraining runs because CUDA kernels, early stopping, and stochastic optimization
-change the learned decision boundaries. Reusing the published local checkpoints
-remains the deterministic way to reproduce the reported 24.36% evaluation.
+change the learned decision boundaries. Outputs are isolated under ``runs/``.
 """
 
 import argparse
+import copy
 import os
 import sys
 import time
@@ -23,10 +24,11 @@ if ROOT not in sys.path:
 from models import GraphEEGNet
 from src.evaluate_deep_ensemble import accuracy, load_models
 from src.extract import EEGDataset
+from src.run_utils import base_manifest, guard_output, prepare_run_dir, save_torch_state, write_json
 from src.train import load_and_split_data_pipeline, set_seed, train_deep_learning_model
 
 
-CHECKPOINT_DIR = os.path.join(ROOT, "models", "checkpoints")
+CHECKPOINT_DIR = None
 
 
 def checkpoint(name):
@@ -34,9 +36,7 @@ def checkpoint(name):
 
 
 def train_eegnet(train_x, train_y, val_x, val_y, seed, kernel, swa, output,
-                 epochs, quick):
-    if os.path.exists(output):
-        os.remove(output)
+                 epochs, quick, force=False):
     set_seed(seed)
     model, _, _ = train_deep_learning_model(
         "eegnet", train_x, train_y, val_x, val_y,
@@ -46,11 +46,11 @@ def train_eegnet(train_x, train_y, val_x, val_y, seed, kernel, swa, output,
         noise_std=0.07, use_swa=swa, swa_start_epoch=25,
         quick_epochs=quick,
     )
-    torch.save(model.state_dict(), output)
+    save_torch_state(model, output, force=force)
     print(f"Saved: {output}", flush=True)
 
 
-def train_window_dcn(train_x, train_y, val_x, val_y, output, epochs, quick):
+def train_window_dcn(train_x, train_y, val_x, val_y, output, epochs, quick, force=False):
     set_seed(42)
     train_window = train_x[:, :, 50:551]
     val_window = val_x[:, :, 50:551]
@@ -61,7 +61,7 @@ def train_window_dcn(train_x, train_y, val_x, val_y, output, epochs, quick):
         temporal_kernel=15, use_mixup=False, noise_std=0.0,
         quick_epochs=quick,
     )
-    torch.save(model.state_dict(), output)
+    save_torch_state(model, output, force=force)
     print(f"Saved: {output}", flush=True)
 
 
@@ -79,7 +79,7 @@ def evaluate_graph(model, loader, device):
     return loss_sum / total, 100.0 * correct / total
 
 
-def train_graph(train_x, train_y, val_x, val_y, output, epochs, quick):
+def train_graph(train_x, train_y, val_x, val_y, output, epochs, quick, force=False):
     set_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_window = train_x[:, :, 50:551].astype(np.float32)
@@ -94,7 +94,7 @@ def train_graph(train_x, train_y, val_x, val_y, output, epochs, quick):
     loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
     best_loss, stale = float("inf"), 0
     run_epochs = quick if quick > 0 else epochs
-    temporary = output + ".training.pth"
+    best_state = None
     for epoch in range(1, run_epochs + 1):
         start = time.time()
         model.train()
@@ -109,7 +109,7 @@ def train_graph(train_x, train_y, val_x, val_y, output, epochs, quick):
         scheduler.step(val_loss)
         if val_loss < best_loss:
             best_loss, stale = val_loss, 0
-            torch.save(model.state_dict(), temporary)
+            best_state = copy.deepcopy(model.state_dict())
         else:
             stale += 1
         print(
@@ -119,25 +119,37 @@ def train_graph(train_x, train_y, val_x, val_y, output, epochs, quick):
         )
         if stale >= 20:
             break
-    model.load_state_dict(torch.load(temporary, map_location=device))
-    torch.save(model.state_dict(), output)
-    os.remove(temporary)
+    if best_state is None:
+        raise RuntimeError("Graph training produced no validation checkpoint")
+    model.load_state_dict(best_state)
+    save_torch_state(model, output, force=force)
     print(f"Saved: {output}", flush=True)
 
 
 def main():
+    global CHECKPOINT_DIR
     parser = argparse.ArgumentParser(
-        description="Train all five models used by the final EEG ensemble."
+        description="Train the historical fixed five-model EEG ensemble."
     )
-    parser.add_argument("--reuse", action="store_true",
-                        help="Skip checkpoints that already exist")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--reuse", action="store_true",
+                        help="Reuse checkpoints in an explicitly selected run")
+    output.add_argument("--force", action="store_true",
+                        help="Allow overwriting checkpoints in an existing run")
     parser.add_argument("--quick", type=int, default=0,
                         help="Use N epochs per model for a pipeline smoke test")
     parser.add_argument("--eegnet-epochs", type=int, default=150)
     parser.add_argument("--dcn-epochs", type=int, default=110)
     parser.add_argument("--graph-epochs", type=int, default=100)
+    parser.add_argument("--run-id")
+    parser.add_argument("--runs-root", default=os.path.join(ROOT, "runs"))
     args = parser.parse_args()
+    run_dir = prepare_run_dir(
+        "legacy-five-model", args.run_id, args.runs_root, args.force or args.reuse
+    )
+    CHECKPOINT_DIR = os.path.join(run_dir, "checkpoints")
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    print(f"Run directory: {run_dir}")
 
     data_path = os.path.join(ROOT, "data", "processed", "eeg_dataset.npz")
     train_x, train_y, val_x, val_y, test_x, test_y, _, _ = (
@@ -147,20 +159,20 @@ def main():
     jobs = [
         ("EEGNet k=25 seed=42", checkpoint("best_eegnet_k25_seed42.pth"),
          lambda path: train_eegnet(train_x, train_y, val_x, val_y, 42, 25,
-                                   False, path, args.eegnet_epochs, args.quick)),
+                                   False, path, args.eegnet_epochs, args.quick, args.force)),
         ("EEGNet k=15 SWA seed=42",
          checkpoint("eegnet_k15_swa_seed42_standalone.pth"),
          lambda path: train_eegnet(train_x, train_y, val_x, val_y, 42, 15,
-                                   True, path, args.eegnet_epochs, args.quick)),
+                                   True, path, args.eegnet_epochs, args.quick, args.force)),
         ("EEGNet k=15 SWA seed=123", checkpoint("eegnet_k15_swa_seed123.pth"),
          lambda path: train_eegnet(train_x, train_y, val_x, val_y, 123, 15,
-                                   True, path, args.eegnet_epochs, args.quick)),
+                                   True, path, args.eegnet_epochs, args.quick, args.force)),
         ("DeepConvNet 0--2000 ms", checkpoint("dcn_window_0_2000_seed42.pth"),
          lambda path: train_window_dcn(train_x, train_y, val_x, val_y, path,
-                                       args.dcn_epochs, args.quick)),
+                                       args.dcn_epochs, args.quick, args.force)),
         ("GraphEEGNet 0--2000 ms", checkpoint("graph_eeg_seed42.pth"),
          lambda path: train_graph(train_x, train_y, val_x, val_y, path,
-                                  args.graph_epochs, args.quick)),
+                                  args.graph_epochs, args.quick, args.force)),
     ]
 
     for index, (name, path, trainer) in enumerate(jobs, 1):
@@ -168,14 +180,25 @@ def main():
         if args.reuse and os.path.exists(path):
             print(f"Reusing: {path}", flush=True)
         else:
+            guard_output(path, force=args.force)
             trainer(path)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    models = load_models(device)
+    models = load_models(device, CHECKPOINT_DIR)
     print(f"\n{'=' * 72}\nFINAL FIXED ENSEMBLE\n{'=' * 72}")
     print("Models:", ", ".join(f"{name}={weight}" for name, weight, _, _ in models))
-    print(f"Validation accuracy: {accuracy(models, val_x, val_y, device):.2f}%")
-    print(f"Test accuracy: {accuracy(models, test_x, test_y, device):.2f}%")
+    validation_accuracy = accuracy(models, val_x, val_y, device)
+    test_accuracy = accuracy(models, test_x, test_y, device)
+    print(f"Validation accuracy: {validation_accuracy:.2f}%")
+    print(f"Test accuracy: {test_accuracy:.2f}%")
+    metrics = {"validation_accuracy": validation_accuracy, "test_accuracy": test_accuracy}
+    manifest = base_manifest(run_dir.name, sys.argv, vars(args));manifest["results"] = metrics
+    manifest_path = os.path.join(run_dir, "manifest.json")
+    metrics_path = os.path.join(run_dir, "metrics.json")
+    if not args.reuse or not os.path.exists(manifest_path):
+        write_json(manifest_path, manifest, force=args.force)
+    if not args.reuse or not os.path.exists(metrics_path):
+        write_json(metrics_path, metrics, force=args.force)
 
 
 if __name__ == "__main__":

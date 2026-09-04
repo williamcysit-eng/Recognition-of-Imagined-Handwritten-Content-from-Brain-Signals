@@ -1,14 +1,109 @@
 # Recognition of Imagined Handwritten Content from Brain Signals
 
-> **Extended reproduction and experiments:** See [EXPERIMENTS_README.md](EXPERIMENTS_README.md) for the English report covering the isolated environment, reproduced baselines, all new architectures, OOF evaluation, theoretical analysis, the fixed 24.36% ensemble, and the stronger 27.56% multi-architecture OOF ensemble.
+Classification of 26 imagined handwritten letters (A-Z) from single-trial EEG.
 
-Train the complete extended five-model ensemble with `python src/train_final_ensemble.py`, or evaluate existing checkpoints with `python src/evaluate_deep_ensemble.py`.
+## Current recommended workflow
 
-The strongest leakage-free multi-architecture OOF ensemble reaches **27.56%** held-out test accuracy. Reproduce it with `python src/evaluate_oof_multiarch_ensemble.py` after training the folds described in `EXPERIMENTS_README.md`.
+The current method is the repeated-seed class-wise ordered OOF/full-development-refit
+hybrid. Its retained checkpoints reproduce **28.33%** for the OOF fold ensemble,
+**28.46%** for the full-development refit, and **29.10%** for their fixed 50/50
+hybrid on the 780-trial held-out test split.
 
-A machine-readable summary of every retained result is available in [`EXPERIMENT_RESULTS.csv`](EXPERIMENT_RESULTS.csv).
+The authoritative result sources are:
 
-Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EEG recordings using deep convolutional neural networks.
+- [`EXPERIMENTS_README.md`](EXPERIMENTS_README.md): protocol, complete experiment report, limitations, and reproduction commands;
+- [`EXPERIMENT_RESULTS.csv`](EXPERIMENT_RESULTS.csv): machine-readable retained results.
+
+This README is the operational entry point. When a number here conflicts with one
+of the authoritative sources, the experimental report and CSV take precedence.
+
+### Train the best hybrid from scratch
+
+```bash
+source .venv/bin/activate
+python src/train_best_hybrid.py --run-id best-hybrid-v1
+```
+
+This one command trains all 35 OOF fold models, selects fusion scales and weights
+from OOF predictions, creates the OOF cache, refits the selected architectures on
+all 270 development trials per class, and evaluates the fixed 50/50 hybrid.
+
+Every training command writes to an isolated `runs/<run-id>/` directory. Existing
+run outputs are never overwritten by default. Choose a new run ID, or explicitly
+pass `--force` if replacement is intentional.
+
+For a short, safe end-to-end smoke test:
+
+```bash
+python src/train_best_hybrid.py --run-id smoke-001 --quick 1
+```
+
+Typical output layout:
+
+```text
+runs/best-hybrid-v1/
+├── config.json
+├── metrics.json
+├── checkpoints.json
+├── checkpoints/
+│   ├── oof_dcn_0_2000/
+│   ├── oof_aligned_dcn/
+│   ├── oof_eegnet_k25/
+│   ├── oof_eegnet_k15_swa/
+│   ├── oof_graph/
+│   └── full_refit/
+└── outputs/
+    └── oof_multiarch_logits.npz
+```
+
+### Evaluate retained local checkpoints
+
+```bash
+python src/evaluate_hybrid_refit_oof.py
+```
+
+The command requires the ignored local dataset, OOF cache, and full-refit
+checkpoints. These binary assets are not included in a normal Git clone.
+
+### Train a standalone model
+
+```bash
+python src/train.py --model deep_conv_net --run-id dcn-v1
+python src/train.py --model eegnet --run-id eegnet-v1
+```
+
+The standalone EEGNet now defaults to the retained configuration: kernel 15,
+Mixup 0.2, Gaussian noise 0.07, and SWA from epoch 25. Use `--no-mixup`,
+`--noise-std`, `--temporal-kernel`, or `--no-swa` for ablations.
+
+### Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The suite verifies the primary/OOF splits, selected-model output shapes,
+checkpoint manifests, non-overwrite behavior, and—when ignored local assets are
+installed—the fixed 24.36% and 29.10% checkpoint evaluations.
+
+After several complete runs, report every run together with the aggregate:
+
+```bash
+python src/summarize_runs.py \
+  runs/seed-set-1/metrics.json \
+  runs/seed-set-2/metrics.json \
+  runs/seed-set-3/metrics.json
+```
+
+The command prints the individual values, mean, sample standard deviation, and
+95% Student-t confidence interval. A new untouched test set and additional
+participants are still required for a publication-quality external claim.
+
+## Historical baseline documentation
+
+The remainder of this README documents the earlier single-split model-development
+pipeline and the historical 26.03% three-model result. It is retained for context,
+but it is not the current recommended final workflow.
 
 ## Table of Contents
 
@@ -46,7 +141,7 @@ The solution employs three specialised convolutional neural network architecture
 | Channels | 24 (standard 10-20 system) |
 | Time points | 801 (−200 ms to +3000 ms) |
 | Sampling rate | 250 Hz |
-| Preprocessing | Bandpass 0.1–45 Hz, ICA artifact removal, baseline correction |
+| Preprocessing | Bandpass 0.1–45 Hz, principal-component artifact reduction, baseline correction |
 | Data shape | (7800, 24, 801) |
 | Labels | 0–25 (A–Z) |
 
@@ -85,7 +180,7 @@ Preprocessing is performed in `src/extract.py`:
 4. **Channel name extraction:** Cleans the cell array of 24 electrode labels.
 5. **Save as .npz:** Compressed NumPy archive for fast subsequent loading.
 
-The data is provided **already preprocessed** with major artifacts removed, baselined, and bandpass filtered between 0.1–45 Hz. Per-trial z-score normalization has also been applied by the data providers.
+The data is provided **already preprocessed** with major artifacts reduced using a principal-component method, baselined, and bandpass filtered between 0.1–45 Hz. Numerical inspection shows that trials do not have identical variance, so the current report does not claim that provider-side per-trial z-score normalization was applied.
 
 ---
 
@@ -101,7 +196,7 @@ For each class (0–25):
     Last  10%  → Test set        (30 samples per class,   780 total)
 ```
 
-**Rationale:** Chronological splitting preserves the physical acquisition order within each class, preventing temporal leakage between train and test. This is more rigorous than random shuffling because later sessions may have different signal characteristics (electrode impedance drift, fatigue effects).
+**Rationale:** The split preserves the sample order stored within each class and avoids random mixing of early and late class samples. This is stricter than random shuffling when later samples have different signal characteristics. The archive does not include a separate global trial timestamp, so this should be described as a **class-wise ordered split**, not as a verified reconstruction of the complete physical acquisition timeline.
 
 ---
 
@@ -324,10 +419,12 @@ python src/train.py --model eeg_inception    # EEGInception
 ```bash
 python src/train.py --model ensemble       # deterministic (default)
 python src/train.py --model ensemble --fast # ~47% faster GPU, minor accuracy trade-off
-python src/train.py --model ensemble --cpu  # CPU with parallel training
+python src/train.py --model ensemble --cpu  # force sequential CPU training
 python src/train.py --model ensemble --seed 42  # specify random seed
+```
 
 **Estimate training time (10 epochs):**
+
 ```bash
 python src/train.py --model ensemble --fast --quick 10
 ```
@@ -338,16 +435,20 @@ python src/train.py --model ensemble --fast --quick 10
 |------|-------------|---------|
 | `--model` | Architecture: `deep_conv_net`, `eegnet`, `eeg_inception`, `ensemble`, `all` | `deep_conv_net` |
 | `--downsample` | Temporal downsampling factor | `1` (250 Hz) |
-| `--epochs` | Maximum training epochs | `50` |
+| `--epochs` | Maximum training epochs | `150` |
 | `--no-mixup` | Disable Mixup augmentation | Enabled for `ensemble`/`eegnet` |
+| `--no-swa` | Disable SWA for standalone EEGNet | SWA enabled |
 | `--mixup-alpha` | Beta distribution alpha for Mixup | `0.2` |
-| `--noise-std` | Gaussian noise standard deviation | `0.0` (off) |
+| `--noise-std` | Gaussian noise standard deviation | EEGNet `0.07`, others `0.0` |
+| `--temporal-kernel` | Standalone EEGNet kernel in samples | `15` |
 | `--cpu` | Force CPU training | `False` |
 | `--fast` | Enable `cudnn.benchmark` (~47% faster GPU epochs; minor accuracy trade-off) | `False` |
 | `--quick N` | Limit to N epochs for timing estimates | `0` (full training) |
 | `--seed` | Random seed for reproducibility | `42` |
+| `--run-id` | Isolated output directory name | timestamped |
+| `--force` | Allow replacement in an existing run | `False` |
 
-Note: Stochastic Weight Averaging (SWA) is baked into the ensemble pipeline by default for the primary EEGNet (k=15) — no flag required. The k=25 variant uses best-checkpoint weights for error diversity. Test-time BN adaptation is applied automatically during ensemble evaluation.
+Note: Stochastic Weight Averaging (SWA) is baked into the ensemble pipeline by default for the primary EEGNet (k=15) — no flag required. The k=25 variant uses best-checkpoint weights for error diversity. BN adaptation was an historical ablation and is not enabled in the current recommended workflow.
 
 ---
 
@@ -384,16 +485,13 @@ Training on CPU is invoked automatically when CUDA is unavailable, or forced wit
 | DataLoader workers | `num_workers=2` — overlaps data loading with forward/backward | minor |
 | Pre-converted float32 | avoids per-batch dtype cast | minor |
 
-### CPU: Parallel Ensemble Training
+### CPU: Sequential Ensemble Training
 
-DeepConvNet and EEGNet are completely independent during training — no shared parameters, no weight exchange. On CPU, the ensemble pipeline exploits this by launching both models in **parallel threads** via `ThreadPoolExecutor`. PyTorch releases the GIL during MKL-DNN operations, allowing both threads to execute simultaneously across available cores.
-
-| Approach | GPU Wall Time | CPU Wall Time |
-|---|---|---|
-| Sequential DCN → EEGNet | ~6 min | ~51 min |
-| Parallel (2 threads) | N/A | **~27 min** |
-
-The parallel path produces identical model weights to sequential CPU training (both use MKL-DNN with deterministic algorithms). Activation requires no additional flags — `python src/train.py --model ensemble --cpu` automatically parallelizes the ensemble.
+The current CPU path trains ensemble members sequentially. This avoids concurrent
+mutation of PyTorch's process-global RNG and thread settings and ensures that the
+SWA model returned by the training loop is the model saved in the run directory.
+The earlier `ThreadPoolExecutor` timing experiment is retained only as an
+historical observation; it is no longer the default implementation.
 
 ### What Was Tried and Rejected
 
@@ -419,6 +517,8 @@ Several speed-oriented changes were tested but regressed accuracy or broke deter
 ```
 .
 ├── README.md                          # This file
+├── EXPERIMENTS_README.md              # Authoritative experiment report
+├── EXPERIMENT_RESULTS.csv             # Authoritative machine-readable results
 ├── requirements.txt                   # Python dependencies
 ├── .gitignore                         # Git ignore rules
 ├── data/
@@ -432,11 +532,15 @@ Several speed-oriented changes were tested but regressed accuracy or broke deter
 │   ├── deep_conv_net.py               # DeepConvNet architecture
 │   ├── eegnet.py                      # EEGNet82 + CBAM + VisualROISpatialPrior
 │   ├── eeg_inception.py               # EEGInception + InceptionModule
-│   └── checkpoints/
-│       └── *.pth                       # Saved model weights
+│   └── checkpoints/                   # Ignored retained/historical weights
+├── runs/                              # Ignored isolated training runs
+├── tests/                             # Split, shape, manifest & evaluation tests
 └── src/
     ├── extract.py                     # Data extraction & preprocessing
-    └── train.py                       # Training pipeline & ensemble orchestrator
+    ├── train.py                       # Standalone/historical training entrypoint
+    ├── train_best_hybrid.py           # Current one-command final workflow
+    ├── run_utils.py                   # Run IDs and overwrite protection
+    └── summarize_runs.py              # Mean, SD and confidence intervals
 ```
 
 ---
@@ -462,7 +566,7 @@ DeepConvNet and EEGNet represent different points on the bias-variance trade-off
 - EEGNet (k=15, 60 ms) has lower capacity (157K params) and uses aggressive regularisation (mixup, noise, max-norm, SWA) — it learns robust but potentially simpler features.
 - EEGNet (k=25, 100 ms) uses the same regularisation as the primary EEGNet but with a longer temporal kernel — it captures slower ERP components (P3 at ~300 ms) that the 60 ms window may truncate.
 
-Their complementary errors cancel out in the ensemble, producing predictions more accurate than any single model alone. SWA (Stochastic Weight Averaging) is applied only to the primary EEGNet (k=15) in the ensemble — the k=25 variant uses best-checkpoint weights to preserve error diversity. Test-time BN adaptation corrects for the mild distribution shift introduced by the chronological train/test split, and is applied asymmetrically (3-model only) because logit averaging across three models smooths individual BN instability.
+Their complementary errors cancel out in the ensemble, producing predictions more accurate than any single model alone. SWA (Stochastic Weight Averaging) is applied only to the primary EEGNet (k=15) in the ensemble — the k=25 variant uses best-checkpoint weights to preserve error diversity. Nominal test-time BN adaptation belonged to the historical three-model experiment; the extended reproduction found that the old implementation restored its statistics and that true adaptation regressed validation performance. It is therefore excluded from the current recommended hybrid.
 
 ### Why No Contrastive Pre-training?
 

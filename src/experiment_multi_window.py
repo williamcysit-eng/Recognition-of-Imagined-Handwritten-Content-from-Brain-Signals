@@ -13,6 +13,7 @@ if ROOT not in sys.path:
 
 from models.multi_window_eeg_net import MultiWindowEEGNet
 from src.extract import EEGDataset
+from src.run_utils import guard_output, prepare_run_dir
 from src.train import load_and_split_data_pipeline, set_seed
 
 
@@ -29,7 +30,9 @@ def evaluate(model, loader, device):
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--seed', type=int, default=42); parser.add_argument('--test', action='store_true')
+    parser.add_argument('--run-id');parser.add_argument('--runs-root',default=os.path.join(ROOT,'runs'));parser.add_argument('--force',action='store_true')
     args = parser.parse_args(); set_seed(args.seed); device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    run_dir=prepare_run_dir('experiment-multi-window',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
     tr,ty,va,vy,te,tey,_,_=load_and_split_data_pipeline(os.path.join(ROOT,'data','processed','eeg_dataset.npz'))
     loaders=[DataLoader(EEGDataset(x,y),64 if i==0 else 128,shuffle=i==0)
              for i,(x,y) in enumerate(((tr,ty),(va,vy),(te,tey)))]
@@ -37,7 +40,7 @@ def main():
     opt=torch.optim.AdamW(model.parameters(),lr=.002,weight_decay=.03)
     sched=torch.optim.lr_scheduler.ReduceLROnPlateau(opt,factor=.5,patience=3,min_lr=1e-5)
     loss_fn=nn.CrossEntropyLoss(label_smoothing=.1); best=float('inf');stale=0
-    path=os.path.join(ROOT,'models','checkpoints',f'multi_window_seed{args.seed}.pth')
+    path=os.path.join(run_dir,'checkpoints',f'multi_window_seed{args.seed}.pth');guard_output(path,force=args.force)
     for epoch in range(1,args.epochs+1):
         t=time.time();model.train()
         for x,y in loaders[0]:

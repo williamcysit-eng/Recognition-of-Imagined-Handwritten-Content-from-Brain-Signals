@@ -159,15 +159,20 @@ class EEGNet82(nn.Module):
             x = self.separable_conv(x)
             return x.numel()
 
-    def forward(self, x):
-        # x shape: (Batch, 1, channels, time_points)
+    def forward_embedding(self, x):
         x = self.spatial_prior(x)
         x = self.temporal_conv(x)
         x = self.spatial_conv(x)
         x = self.cbam(x)
         x = self.separable_conv(x)
-        x = self.fc(x)
-        return x
+        x = self.fc[0](x)
+        x = self.fc[1](x)
+        return self.fc[2](x)
+
+    def forward(self, x):
+        embedding = self.forward_embedding(x)
+        embedding = self.fc[3](embedding)
+        return self.fc[4](embedding)
 
 @torch.no_grad()
 def apply_max_norm_constraints(model, max_norm_spatial=1.0, max_norm_fc=0.25):
@@ -187,6 +192,5 @@ def apply_max_norm_constraints(model, max_norm_spatial=1.0, max_norm_fc=0.25):
             norms = torch.norm(param.data, p=2, dim=1, keepdim=True)
             desired = torch.clamp(norms, max=max_norm_fc)
             param.data *= (desired / (norms + 1e-10))
-
 
 

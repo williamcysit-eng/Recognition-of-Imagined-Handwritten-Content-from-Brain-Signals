@@ -1,3 +1,7 @@
+> Historical optimization log only. For the current retained protocol and
+> results, use `EXPERIMENTS_README.md` and `EXPERIMENT_RESULTS.csv` as the
+> authoritative sources.
+
 ## Comprehensive Results: What Worked and What Didn't
 
 ### Part 1: Early Cleanup & Baseline (Initial State)

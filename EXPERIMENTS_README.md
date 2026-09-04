@@ -17,10 +17,10 @@ The best checkpoint-based result obtained in this study is:
 
 | Metric | Accuracy |
 |---|---:|
-| Multi-architecture OOF accuracy | **18.72%** |
-| Held-out test accuracy | **27.56%** |
+| Repeated-seed OOF accuracy | **19.13%** |
+| Held-out test accuracy | **29.10%** |
 
-The strongest prediction is produced by chronological folds of windowed DeepConvNet, aligned DeepConvNet, EEGNet k=25, EEGNet k=15 SWA, and GraphEEGNet. Fusion weights are selected exclusively from out-of-fold predictions.
+The strongest prediction is a fixed 50/50 hybrid of a repeated-seed chronological OOF ensemble and models refitted on the complete 270-trial-per-class development set. Architectures and fusion weights are selected exclusively from out-of-fold predictions before refitting.
 
 ---
 
@@ -329,7 +329,8 @@ OOF did not beat the final ensemble, but the 13.46--18.30% spread exposed substa
 Reload the folds with:
 
 ```bash
-python src/train_oof_dcn.py --folds 5 --epochs 100 --seed 42 --reuse
+python src/train_oof_dcn.py --folds 5 --epochs 100 --seed 42 --reuse \
+  --output-root models/checkpoints
 ```
 
 ### Multi-architecture OOF extension
@@ -347,28 +348,59 @@ The same five chronological folds were used to train EEGNet k=25 models. No samp
 | Five aligned DeepConvNet folds | 14.87% | 23.85% |
 | Final five-architecture OOF fusion | **18.72%** | **27.56%** |
 | Nested regularized probability stacking | 18.08% | 26.54% |
+| Repeated-seed OOF fusion | **19.13%** | **28.33%** |
+| Full-development refit | -- | **28.46%** |
+| Fixed 50/50 OOF + refit hybrid | -- | **29.10%** |
 
 The final integer weights are `(5, 1, 5, 8, 1)` for windowed DCN, aligned DCN, EEGNet k=25, EEGNet k=15 SWA, and GraphEEGNet. Every architecture is scaled to the OOF logit standard deviation of the windowed DCN. Weights and scales are computed from OOF predictions, not test labels. EEGNet k=15 SWA receives the largest weight despite weaker standalone OOF accuracy because its errors complement both DCN variants. Graph and aligned DCN receive small nonzero weights that improve OOF accuracy but do not change the final test count beyond the four-architecture result.
+
+### Repeated-seed bagging and full-development refit
+
+A second independent seed was trained for every Window DCN and EEGNet k=15 SWA fold. Averaging seeds inside each fold increased OOF accuracy from 18.72% to 19.13% and test accuracy from 27.56% to 28.33%. OOF re-selection changed weights to `(5, 3, 3, 9, 0)`, automatically removing GraphEEGNet after seed variance was reduced.
+
+A third EEGNet k=15 SWA seed was also evaluated. It reached 14.69% OOF / 23.85% test; averaging all three seeds produced 16.35% OOF versus 16.48% for the selected two-seed pair. OOF therefore excluded the third seed. Non-uniform seed weights improved each architecture in isolation but reduced the joint ensemble to 19.07% OOF, so equal averaging of the two retained seeds remained final.
+
+The selected nonzero architectures were then retrained on all 270 development trials per class using fixed epoch counts and the OOF-selected weights. This full-development refit reached 28.46%. A predeclared 50/50 average of scale-normalized OOF-fold and full-refit logits reached **29.10%**. No blend coefficient was searched on test labels.
+
+Additional negative results were retained:
+
+- class-wise reliability weights reverted to global weights under nested OOF and stayed at 28.33%;
+- fixed recency fold weights `(1,2,3,4,5)` reduced test accuracy to 27.95%;
+- strict cumulative walk-forward DCN produced stage accuracies of 4.06%, 10.68%, 11.18%, and 14.60%, for 10.13% combined forward accuracy and 15.51% final-stage test accuracy; early stages lacked enough training data and did not support recency weighting;
+- multi-scale fixed GraphEEGNet reached 16.92% validation / 18.33% test and received zero ensemble weight;
+- latent teacher-student pretraining improved validation to 12.44% but remained below EEG-specific CNNs;
+- prototype center loss reached only 14.36% validation.
 
 Train or reload the EEGNet folds:
 
 ```bash
-python src/train_oof_eegnet.py --epochs 80 --folds 5 --seed 142
-python src/train_oof_eegnet.py --epochs 80 --folds 5 --seed 142 --reuse
+python src/train_oof_eegnet.py --epochs 80 --folds 5 --seed 142 \
+  --output-root runs/manual-oof/checkpoints
+python src/train_oof_eegnet.py --epochs 80 --folds 5 --seed 142 --reuse \
+  --output-root models/checkpoints
 ```
+
+These commands are useful for an individual architecture experiment. Use
+`train_best_hybrid.py` for a complete new multi-architecture run so that both DCN
+seeds, both retained k=15 seeds, all other folds, cache, and refits share one run.
 
 Additional fold commands:
 
 ```bash
-python src/train_oof_eegnet.py --epochs 80 --seed 342 --kernel 15 --swa
-python src/train_oof_graph.py --epochs 60 --seed 242
-python src/train_oof_aligned_dcn.py --epochs 80 --seed 442
+python src/train_oof_eegnet.py --epochs 80 --seed 342 --kernel 15 --swa \
+  --output-root runs/manual-oof/checkpoints
+python src/train_oof_graph.py --epochs 60 --seed 242 \
+  --output-root runs/manual-oof/checkpoints
+python src/train_oof_aligned_dcn.py --epochs 80 --seed 442 \
+  --output-root runs/manual-oof/checkpoints
 ```
 
 Evaluate the fixed leakage-free fusion:
 
 ```bash
-python src/evaluate_oof_multiarch_ensemble.py
+python src/evaluate_oof_multiarch_ensemble.py \
+  --checkpoint-root models/checkpoints \
+  --cache-path runs/published-oof-eval/outputs/oof_multiarch_logits.npz
 ```
 
 ---
@@ -381,7 +413,9 @@ python src/evaluate_oof_multiarch_ensemble.py
 | Multi-seed five-model ensemble | 22.44% | 24.10% |
 | Ensemble with 0--2,000 ms DCN | 22.82% | 24.23% |
 | Ensemble with GraphEEGNet | **23.33%** | **24.36%** |
-| Multi-architecture OOF ensemble | **18.72% OOF** | **27.56%** |
+| Multi-architecture OOF ensemble | 18.72% OOF | 27.56% |
+| Repeated-seed OOF ensemble | **19.13% OOF** | **28.33%** |
+| Fixed OOF/full-refit hybrid | -- | **29.10%** |
 
 ### Final model weights
 
@@ -408,81 +442,98 @@ The gain comes from error decorrelation across temporal scales, seeds, input win
 
 ---
 
-## 10. Final Reproduction
+## 10. Current Reproduction
 
-### Best multi-architecture OOF result
+This report and `EXPERIMENT_RESULTS.csv` are the authoritative descriptions of
+retained results. The root README is an operational guide; earlier single-split
+results in its historical section are not the current final method.
+
+### Train the best OOF/full-refit hybrid in one command
+
+After preparing `data/processed/eeg_dataset.npz`:
 
 ```bash
-python src/train_oof_dcn.py --folds 5 --epochs 100 --seed 42
-python src/train_oof_eegnet.py --folds 5 --epochs 80 --seed 142
-python src/train_oof_eegnet.py --folds 5 --epochs 80 --seed 342 --kernel 15 --swa
-python src/train_oof_graph.py --epochs 60 --seed 242
-python src/train_oof_aligned_dcn.py --epochs 80 --seed 442
-python src/evaluate_oof_multiarch_ensemble.py
+source .venv/bin/activate
+python src/train_best_hybrid.py --run-id best-hybrid-v1
 ```
 
-Expected final output:
+The command performs the complete dependency chain:
+
+1. train 35 class-wise ordered OOF checkpoints across five architecture groups;
+2. calculate OOF logits and select scales and integer fusion weights;
+3. store those selected values in the OOF cache;
+4. refit the selected architecture families on all 270 development trials per class;
+5. evaluate the OOF ensemble, full-development refit, and fixed 50/50 hybrid.
+
+The retained checkpoints produce:
 
 ```text
 Architectures: dcn, aligned_dcn, eegnet_k25, eegnet_k15_swa, graph
-OOF-selected integer weights: (5, 1, 5, 8, 1)
-OOF accuracy: 18.72%
-Held-out test accuracy: 27.56%
+OOF-selected integer weights: (5, 3, 3, 9, 0)
+OOF accuracy: 19.13%
+Held-out test accuracy: 28.33%
+Full-development refit: 28.46%
+Fixed 50/50 hybrid: 29.10%
 ```
 
-### Train all final models from scratch
+Every invocation writes to `runs/<run-id>/`, including configuration, metrics,
+OOF cache, all checkpoints, and a SHA256 checkpoint inventory. An existing run is
+rejected by default. `--force` is required to replace any output in that run.
 
-After preparing `data/processed/eeg_dataset.npz`, the complete five-model workflow can be run with one command:
+The smoke-test path is isolated and therefore cannot damage retained checkpoints:
 
 ```bash
-source .venv/bin/activate
-python src/train_final_ensemble.py
+python src/train_best_hybrid.py --run-id smoke-001 --quick 1
 ```
 
-The script trains all required EEGNet, windowed DeepConvNet, and GraphEEGNet checkpoints, saves them under `models/checkpoints/`, and automatically evaluates the fixed ensemble. Full training can take tens of minutes depending on hardware.
+Complete retraining reproduces the method, not necessarily bit-identical weights
+or the exact 29.10% point estimate. CUDA kernels, stochastic optimization, and
+early-stopping trajectories can change the selected OOF weights and final result.
 
-For a short end-to-end smoke test:
+### Evaluate retained best-hybrid checkpoints
+
+When the ignored local dataset, OOF cache, and full-refit checkpoints are present:
 
 ```bash
-python src/train_final_ensemble.py --quick 2
+python src/evaluate_hybrid_refit_oof.py
 ```
 
-To keep and reuse checkpoints that already exist:
+The evaluator reads scales and weights from a newly generated cache. Legacy caches
+without those fields fall back to the retained `(5,3,3,9,0)` configuration.
+
+### Historical five-model single-split workflow
+
+`train_final_ensemble.py` is retained only for the earlier 24.36% fixed five-model
+experiment. It now also writes to an isolated run directory:
 
 ```bash
-python src/train_final_ensemble.py --reuse
+python src/train_final_ensemble.py --run-id legacy-five-v1
+python src/evaluate_deep_ensemble.py \
+  --checkpoint-dir runs/legacy-five-v1/checkpoints
 ```
 
-Complete retraining reproduces the method rather than guaranteeing bit-identical weights. Stochastic optimization, CUDA kernels, and early-stopping trajectories can change the final accuracy. The fixed five-model checkpoints are required for exact reproduction of the 24.36% non-OOF result; the fold checkpoints are required for exact reproduction of the 27.56% OOF result.
+The retained historical checkpoints reproduce 23.33% validation and 24.36% test
+accuracy. They are not the 29.10% best-hybrid pipeline.
 
-### Evaluate existing final checkpoints
+### Regression tests
 
 ```bash
-source .venv/bin/activate
-python src/evaluate_deep_ensemble.py
+python -m unittest discover -s tests -v
 ```
 
-Expected output:
+The tests cover split isolation and balance, selected-model tensor shapes,
+checkpoint manifests, default non-overwrite behavior, and fixed checkpoint
+evaluation when the ignored local binary assets are installed.
 
-```text
-Models: eegnet_k25_seed42=3, eegnet_k15_swa_seed42=1,
-        eegnet_k15_swa_seed123=2, dcn_window_0_2000=2,
-        graph_eeg_seed42=2
-Validation accuracy: 23.33%
-Test accuracy: 24.36%
+After at least five predeclared complete runs, aggregate them with:
+
+```bash
+python src/summarize_runs.py runs/run-1/metrics.json runs/run-2/metrics.json \
+  runs/run-3/metrics.json runs/run-4/metrics.json runs/run-5/metrics.json
 ```
 
-Required checkpoints:
-
-```text
-models/checkpoints/best_eegnet_k25_seed42.pth
-models/checkpoints/eegnet_k15_swa_seed42_standalone.pth
-models/checkpoints/eegnet_k15_swa_seed123.pth
-models/checkpoints/dcn_window_0_2000_seed42.pth
-models/checkpoints/graph_eeg_seed42.pth
-```
-
-The command was executed three consecutive times with identical output. Checkpoint-based inference is deterministic in the tested environment. Full retraining is more sensitive to GPU kernels, software versions, early stopping, and random-number consumption order.
+The summary includes all individual values, mean, sample standard deviation, and
+a 95% Student-t confidence interval.
 
 ---
 
@@ -502,20 +553,30 @@ The command was executed three consecutive times with identical output. Checkpoi
 1. The dataset contains only one participant.
 2. Trials are temporally ordered and class-blocked, so drift can interact with class identity.
 3. Validation and test contain only 780 trials each; one trial changes accuracy by about 0.128 percentage points.
-4. Repeated studies on one split create indirect test-set familiarity.
 5. Graph coordinates are approximate rather than participant-specific digitized positions.
-6. The 27.56% result is checkpoint-reproducible, but a full multi-run retraining distribution has not yet been measured.
+6. The 29.10% result is checkpoint-reproducible, but a full multi-run retraining distribution has not yet been measured.
+7. The 29.10% hybrid corresponds to 227/780 correct trials, only five more than
+   the 28.46% full-refit system. This small paired difference is not evidence of a
+   statistically reliable improvement by itself.
+8. The current dataset has no separately distributed acquisition timestamp. The
+   protocol therefore relies on within-class sample order and should be described
+   as a class-wise chronological split rather than a fully reconstructed global timeline.
 
 ---
 
 ## 13. Recommended Future Work
 
-1. Repeat the complete OOF experiment with new seeds and report the distribution rather than one run.
-2. Evaluate the OOF ensemble on a newly collected or completely untouched external test set.
-3. Use digitized participant-specific electrode coordinates.
-4. Add session/domain-adversarial objectives to reduce chronological drift.
-5. Evaluate on additional participants.
-6. Reserve a new untouched test split before further ensemble searches.
-7. Report means, standard deviations, and confidence intervals over multiple complete retraining runs.
+1. Freeze the current 780-trial test split for retrospective reporting only. Do
+   not use it for further architecture, seed, epoch, calibration, or fusion choices.
+2. Designate a newly collected or completely untouched external test set before
+   the next development cycle; preferably include additional participants and
+   retain participant/session identifiers for grouped evaluation.
+3. Repeat the complete OOF/refit pipeline with at least five predeclared run seeds.
+   Report the number of runs, mean, sample standard deviation, 95% confidence
+   interval, and all individual run values—not only the best checkpoint.
+4. Use digitized participant-specific electrode coordinates.
+5. Add session/domain-adversarial objectives to reduce chronological drift.
+6. For multi-participant data, report both within-participant and
+   leave-one-participant-out performance with participant-level uncertainty.
 
 The central lesson is that stronger performance came from combining appropriate EEG priors—short temporal filters, explicit ERP windows, multiple stochastic solutions, and electrode topology—rather than simply increasing depth or parameter count.

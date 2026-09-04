@@ -109,3 +109,23 @@ class DynamicGraphEEGNet(GraphEEGNet):
         super().__init__(num_channels, num_classes, dropout)
         self.graph1 = DynamicGraphTemporalBlock(32, 9, dropout)
         self.graph2 = DynamicGraphTemporalBlock(32, 15, dropout)
+
+
+class MultiScaleGraphTemporalBlock(nn.Module):
+    def __init__(self, features, kernel, dropout):
+        super().__init__();self.graph_logits=nn.Parameter(torch.zeros(3));self.gate=nn.Parameter(torch.zeros(1,features,1,1))
+        self.temporal=nn.Sequential(nn.Conv2d(features,features,(1,kernel),padding=(0,kernel//2),groups=features,bias=False),nn.Conv2d(features,features,1,bias=False),nn.BatchNorm2d(features),nn.ELU(),nn.Dropout(dropout))
+    def forward(self,x,graphs):
+        weights=self.graph_logits.softmax(0);mixed=sum(w*torch.einsum('ij,bfjt->bfit',g,x) for w,g in zip(weights,graphs))
+        return x+self.temporal(x+torch.sigmoid(self.gate)*mixed)
+
+
+class MultiScaleGraphEEGNet(GraphEEGNet):
+    """GraphEEGNet using local, medium, and global fixed anatomical graphs."""
+    def __init__(self,num_channels=24,num_classes=26,dropout=.35):
+        super().__init__(num_channels,num_classes,dropout)
+        self.register_buffer('multiscale_adjacency',torch.stack([electrode_graph(k) for k in (2,4,8)]))
+        self.graph1=MultiScaleGraphTemporalBlock(32,9,dropout);self.graph2=MultiScaleGraphTemporalBlock(32,15,dropout)
+    def forward(self,x):
+        x=self.temporal(x);x=self.graph1(x,self.multiscale_adjacency);x=self.graph2(x,self.multiscale_adjacency)
+        return self.head(self.spatial(x))

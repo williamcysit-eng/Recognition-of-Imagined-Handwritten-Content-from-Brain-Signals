@@ -14,6 +14,7 @@ if ROOT not in sys.path:
 
 from models.eeg_conformer import EEGConformer
 from src.extract import EEGDataset
+from src.run_utils import guard_output, prepare_run_dir
 from src.train import load_and_split_data_pipeline, set_seed
 
 
@@ -37,7 +38,9 @@ def main():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test", action="store_true")
+    parser.add_argument("--run-id");parser.add_argument("--runs-root",default=os.path.join(ROOT,"runs"));parser.add_argument("--force",action="store_true")
     args = parser.parse_args()
+    run_dir=prepare_run_dir('experiment-conformer',args.run_id,args.runs_root,args.force);print(f'Run directory: {run_dir}')
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     path = os.path.join(ROOT, "data", "processed", "eeg_dataset.npz")
@@ -56,8 +59,8 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.005)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, 1e-5)
     loss_fn = nn.CrossEntropyLoss()
-    checkpoint = os.path.join(ROOT, "models", "checkpoints",
-                              f"eeg_conformer_0_2000_seed{args.seed}.pth")
+    checkpoint = os.path.join(run_dir, "checkpoints", f"eeg_conformer_0_2000_seed{args.seed}.pth")
+    guard_output(checkpoint,force=args.force)
     best_loss, stale = float("inf"), 0
     for epoch in range(1, args.epochs + 1):
         start = time.time()

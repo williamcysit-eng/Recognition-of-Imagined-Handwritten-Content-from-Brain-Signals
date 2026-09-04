@@ -12,6 +12,7 @@ if ROOT not in sys.path:
 
 from models import DeepConvNet
 from src.extract import EEGDataset
+from src.run_utils import guard_output, prepare_run_dir, save_torch_state
 from src.train import load_and_split_data_pipeline, set_seed, train_deep_learning_model
 
 
@@ -46,7 +47,7 @@ def predict(model, x, y, device):
 
 def load_fold(path, device):
     model = DeepConvNet(24, 26, 501, temporal_kernel=15, dropout_rate=0.5)
-    model.load_state_dict(torch.load(path, map_location=device))
+    model.load_state_dict(torch.load(path, map_location=device, weights_only=True))
     return model.to(device)
 
 
@@ -55,15 +56,28 @@ def main():
     parser.add_argument("--epochs", type=int, default=120)
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--reuse", action="store_true")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--reuse", action="store_true")
+    output.add_argument("--force", action="store_true")
+    parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--data-path", default=os.path.join(ROOT, "data", "processed", "eeg_dataset.npz"))
+    parser.add_argument("--output-root", help="Checkpoint root supplied by an orchestrated run")
+    parser.add_argument("--run-id")
+    parser.add_argument("--runs-root", default=os.path.join(ROOT, "runs"))
     args = parser.parse_args()
 
-    archive = np.load(os.path.join(ROOT, "data", "processed", "eeg_dataset.npz"))
+    archive = np.load(args.data_path)
     data = archive["data"].astype(np.float32)[:, :, 50:551]  # 0..2000 ms
     labels = archive["labels_0indexed"]
     splits, test_idx = make_oof_splits(labels, args.folds)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint_dir = os.path.join(ROOT, "models", "checkpoints", "oof_dcn_0_2000")
+    device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
+    if args.output_root:
+        checkpoint_root = args.output_root
+    else:
+        run_dir = prepare_run_dir("oof-dcn", args.run_id, args.runs_root, args.force)
+        checkpoint_root = os.path.join(run_dir, "checkpoints")
+        print(f"Run directory: {run_dir}")
+    checkpoint_dir = os.path.join(checkpoint_root, "oof_dcn_0_2000")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     oof_correct = oof_total = 0
@@ -75,15 +89,16 @@ def main():
         if args.reuse and os.path.exists(checkpoint):
             model = load_fold(checkpoint, device)
         else:
+            guard_output(checkpoint, force=args.force)
             set_seed(args.seed + fold)
             model, _, device = train_deep_learning_model(
                 "deep_conv_net", data[train_idx], labels[train_idx],
                 data[val_idx], labels[val_idx], 24, 501,
                 num_epochs=args.epochs, batch_size=64, lr=0.005,
                 temporal_kernel=15, use_mixup=False, noise_std=0.0,
-                early_stopping_patience=20,
+                early_stopping_patience=20, force_cpu=args.cpu,
             )
-            torch.save(model.state_dict(), checkpoint)
+            save_torch_state(model, checkpoint, force=args.force)
         val_logits, val_targets = predict(model, data[val_idx], labels[val_idx], device)
         fold_correct = (val_logits.argmax(1) == val_targets).sum().item()
         oof_correct += fold_correct
