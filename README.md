@@ -22,7 +22,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 ## Project Overview
 
-This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with only 300 training examples per class.
+This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with 240 fitting examples per class under the frozen split.
 
 The strict-inductive point-3 regression run measured **23.72% single-trial test accuracy**, above the accepted V5.6.2 baseline, with no test-cohort adaptation.
 
@@ -117,7 +117,27 @@ Parameters: 278,246
 
 **Design rationale:** DeepConvNet uses standard conv-pool blocks to learn hierarchical spatiotemporal features. Block 1 combines temporal filtering (across time) with spatial integration (across electrodes). Blocks 2–3 extract progressively more abstract features. The 15-sample temporal kernel at 250 Hz captures 60 ms of EEG dynamics, which is well-suited for ERP components (P1 at ~100 ms, N170 at ~170 ms, P3 at ~300 ms).
 
-### 2. EEGNet
+### 2. Position-preserving DeepConvNet head (development ablation)
+
+The unchanged DeepConvNet stem can use a smaller classifier without removing
+temporal alignment:
+
+```
+80 features × 100 output positions
+    → shared bias-free 1×1 projection (80→32)
+    → flatten 3,200 ordered features
+    → Linear(3,200, 26)
+```
+
+This variant has 156,006 parameters, compared with 278,246 for the unchanged
+DeepConvNet. Run it with `--model compressed_deep_conv_net`; the default
+ensemble remains unchanged. On the fixed development partition, the matched
+baseline-seed ablation scored 16.92% versus 13.85% for the stored full-head DCN.
+Replacing DCN in the fixed 5:5:1 three-model mixture scored 20.90% versus
+20.26% for the stored baseline mixture. These are development-only,
+single-seed selection measurements, not new test-set results.
+
+### 3. EEGNet
 
 Based on Lawhern et al. (2018), with enhancements: Visual ROI spatial prior and CBAM-EEG attention module.
 
@@ -139,7 +159,7 @@ Ensemble configuration: kernel=15 (60 ms temporal window).
 
 **Design rationale:** EEGNet uses depthwise separable convolutions — a parameter-efficient design that separates spatial filtering (across electrodes) from temporal filtering (across time). The `VisualROISpatialPrior` initialises channel weights with anatomical knowledge: occipital channels (O1, O2, POz) at 0.95, parietal at 0.80, motor at 0.40, and prefrontal at 0.05. The CBAM module adds learnable channel and temporal attention. The 15-sample kernel (60 ms) matches the reference paper's recommendation for fine temporal dynamics in handwriting imagery — substantially shorter than the original EEGNet's kernel of 64 samples (256 ms) designed for motor imagery.
 
-### 3. EEGInception
+### 4. EEGInception
 
 Based on Santamaria-Vazquez et al. (2020), adapted with shorter temporal kernels as recommended by the reference paper.
 
@@ -158,6 +178,20 @@ Parameters: 243,655
 
 **Design rationale:** The Inception modules extract information at three temporal scales simultaneously (56 ms, 40 ms, 24 ms at 250 Hz). Different handwriting imagery processes — visual encoding, motor planning, and execution imagery — may be encoded in distinct frequency bands and time scales. The multi-scale parallel convolutions capture this diversity in a single forward pass.
 
+### 5. Recorded-time window ablations
+
+The training CLI can ablate timing using the recorded `time_points` vector:
+
+```bash
+python src/train.py --model deep_conv_net --window early --development-only
+python src/train.py --model deep_conv_net --window late --development-only
+```
+
+`early` selects `[0, 600)` ms and `late` selects `[600, 2800]` ms. The
+selector applies the same recorded-time mask to fitting and development data;
+`full` remains the default. These are single-trial, development-only
+ablations, not crops treated as independent examples.
+
 ---
 
 ## Training Methodology
@@ -170,7 +204,7 @@ All models share a common training infrastructure:
 |-----------|---------------|
 | **Optimizer** | AdamW, learning rate = 0.005, weight decay = 0.05 |
 | **LR Scheduler** | ReduceLROnPlateau (mode=min, factor=0.5, patience=3, min_lr=1e−6) |
-| **Loss Function** | Cross-Entropy with label smoothing (0.0 for DeepConvNet, 0.1 for EEGNet/EEGInception) |
+| **Loss Function** | Cross-Entropy with label smoothing (0.0 for DeepConvNet and compressed DCN, 0.1 for EEGNet/EEGInception) |
 | **Batch Size** | 64 |
 | **Max Epochs** | 150 (early stopping patience = 40 on validation loss) |
 | **Checkpointing** | Per-run, per-model, per-kernel, per-seed best, SWA-recalibrated, and selected state snapshots saved under `models/checkpoints/runs/`, with JSON metadata describing the evaluated state. |
@@ -184,6 +218,7 @@ All models share a common training infrastructure:
 | Model | Augmentations | Label Smoothing | Temporal Kernel | SWA |
 |-------|:---:|:---:|:---:|:---:|
 | DeepConvNet | None (clean data) | 0.0 | 15 (60 ms) | Off |
+| Position-preserving DCN | None (clean data) | 0.0 | 15 (60 ms) | Off |
 | EEGNet (k=15) | Mixup (α=0.2) + Gaussian noise (σ=0.07) | 0.1 | 15 (60 ms) | On (epoch 25+) |
 | EEGNet (k=25) | Mixup (α=0.2) + Gaussian noise (σ=0.07) | 0.1 | 25 (100 ms) | Off (best ckpt) |
 | EEGInception | Mixup (α=0.2) | 0.1 | — | Off |
@@ -307,9 +342,10 @@ This creates `data/processed/eeg_dataset.npz`.
 
 **Train a single model:**
 ```bash
-python src/train.py --model deep_conv_net    # DeepConvNet
-python src/train.py --model eegnet           # EEGNet
-python src/train.py --model eeg_inception    # EEGInception
+python src/train.py --model deep_conv_net              # DeepConvNet
+python src/train.py --model compressed_deep_conv_net   # compressed DCN head
+python src/train.py --model eegnet                     # EEGNet
+python src/train.py --model eeg_inception              # EEGInception
 ```
 
 **Train the ensemble (DeepConvNet + two EEGNet variants):**
@@ -333,10 +369,11 @@ python src/train.py --model ensemble --fast --quick 10
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--model` | Architecture: `deep_conv_net`, `eegnet`, `eeg_inception`, `ensemble`, `all` | `deep_conv_net` |
+| `--model` | Architecture: `deep_conv_net`, `compressed_deep_conv_net`, `eegnet`, `eeg_inception`, `ensemble`, `all` | `deep_conv_net` |
 | `--downsample` | Temporal downsampling factor | `1` (250 Hz) |
-| `--epochs` | Maximum training epochs | `50` |
-| `--no-mixup` | Disable Mixup augmentation | Enabled for `ensemble`/`eegnet` |
+| `--window` | Recorded-time ablation: `full`, `early`, or `late` | `full` |
+| `--epochs` | Maximum training epochs | `150` |
+| `--no-mixup` | Disable Mixup augmentation during training | Enabled for `ensemble`/`eegnet` |
 | `--mixup-alpha` | Beta distribution alpha for Mixup | `0.2` |
 | `--noise-std` | Gaussian noise standard deviation | `0.0` (off) |
 | `--cpu` | Force CPU training | `False` |
@@ -442,6 +479,7 @@ Several speed-oriented changes were tested but regressed accuracy or broke deter
 ├── models/
 │   ├── __init__.py                    # Model exports
 │   ├── deep_conv_net.py               # DeepConvNet architecture
+│   ├── position_preserving_dcn.py     # Compressed DCN classifier head
 │   ├── eegnet.py                      # EEGNet82 + CBAM + VisualROISpatialPrior
 │   ├── eeg_inception.py               # EEGInception + InceptionModule
 │   └── checkpoints/
