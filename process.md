@@ -377,3 +377,59 @@ No test-time BatchNorm adaptation was used, and the test result was not used to 
 | Logistic regression | 13.72% |
 
 The three-model result is **22.56%**, which is **+0.38 percentage points** above the repository's approximately **22.18%** baseline. The two-model result is **21.79%**, matching the documented 21.79% two-model baseline. The older 26.03% result in the historical log used test-time BatchNorm adaptation and is not an apples-to-apples baseline under the new strict inductive protocol.
+
+---
+
+### Part 10: SWA Validation, RNG Isolation, and Evaluated Artifact Control (Session 2026-06-20)
+
+Suggested improvements 3.1–3.3 were implemented in `src/train.py`.
+
+#### Implementation
+
+| Area | Change | Status |
+|------|--------|:---:|
+| 3.1 BN adaptation | The strict evaluation path remains inductive. The former test-cohort BatchNorm pass is absent; no evaluation input updates model buffers. | ✅ |
+| 3.2 SWA | Replaced custom whole-`state_dict` averaging with `torch.optim.swa_utils.AveragedModel(use_buffers=False)`. The SWA candidate's BatchNorm buffers are recalibrated using a deterministic clean fitting-data pass with dropout disabled. Best-checkpoint and SWA candidates are evaluated on the same validation partition individually and in the DCN+EEGNet ensemble. | ✅ |
+| 3.3 RNG isolation | Every model configuration receives a stable seed derived from the requested base seed. Training uses dedicated DataLoader, augmentation, and NumPy generators. CPU ensemble training is sequential rather than concurrent, avoiding shared process-global RNG state. | ✅ |
+| 3.3 evaluated artifacts | Each run writes separate best, SWA-recalibrated, and selected checkpoints plus JSON metadata under `models/checkpoints/runs/<run-id>/seed_<model-seed>/`. Metadata records the kernel, seed, SWA averaging window, BN recalibration source, validation candidates, and the candidate actually selected. | ✅ |
+
+The ensemble selects the k=15 candidate from development ensemble accuracy, with ties retaining the best-validation checkpoint. Final-test evaluation occurs only after that validation-only selection.
+
+#### Focused Verification
+
+```text
+SWA candidate creation after 24 averaging epochs              PASS
+BN recalibration from clean fitting data only                  PASS
+best/SWA/selected checkpoint and metadata creation             PASS
+same-seed run after global RNG perturbation                    IDENTICAL history/checkpoint
+legacy BN-adaptation and shared-RNG paths                     ABSENT
+```
+
+#### Baseline Regression Run
+
+The full regression used the new accepted baseline recipe and explicit held-out evaluation:
+
+```bash
+python src/train.py --model ensemble --evaluate-test --seed 42 --run-id point3-regression
+```
+
+The k=15 SWA candidate won development selection:
+
+```text
+EEGNet k=15 best validation accuracy: 18.85%
+EEGNet k=15 SWA + clean-training BN validation accuracy: 19.74%
+DCN + k=15 best ensemble validation accuracy: 18.33%
+DCN + k=15 SWA ensemble validation accuracy: 19.36%
+Selected candidate: SWA
+```
+
+| Model / ensemble | Strict inductive test accuracy |
+|------------------|:---:|
+| DeepConvNet | 18.08% |
+| EEGNet (k=15, selected SWA) | 22.95% |
+| DCN + EEGNet (k=15) | 23.33% |
+| EEGNet (k=25, no SWA) | 21.03% |
+| DCN + EEGNet (k=15) + EEGNet (k=25) | **23.72%** |
+| Logistic regression | 13.72% |
+
+Against the V5.6.2 baseline of **22.56%**, the new three-model result is **+1.16 percentage points** (approximately 185 versus 176 correct predictions out of 780). This is no regression. The comparison includes both SWA-policy and RNG-stream changes, so the result does not isolate either factor as a causal accuracy gain.

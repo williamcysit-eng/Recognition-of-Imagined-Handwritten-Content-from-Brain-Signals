@@ -24,7 +24,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with only 300 training examples per class.
 
-The solution employs three specialised convolutional neural network architectures designed for EEG decoding, culminating in an ensemble that combines complementary model inductive biases with Stochastic Weight Averaging (SWA) to achieve **22.18% single-trial test accuracy** — substantially above the ~3.85% random-chance baseline.
+The strict-inductive point-3 regression run measured **23.72% single-trial test accuracy**, above the accepted V5.6.2 baseline, with no test-cohort adaptation.
 
 ---
 
@@ -173,9 +173,9 @@ All models share a common training infrastructure:
 | **Loss Function** | Cross-Entropy with label smoothing (0.0 for DeepConvNet, 0.1 for EEGNet/EEGInception) |
 | **Batch Size** | 64 |
 | **Max Epochs** | 150 (early stopping patience = 40 on validation loss) |
-| **Checkpointing** | Best validation loss epoch weights saved to `models/checkpoints/` |
-| **Reproducibility** | Seed = 42, `torch.backends.cudnn.deterministic = True` |
-| **SWA** | Stochastic Weight Averaging baked into EEGNet (k=15, ensemble mode). Averages weights from epoch 25 onward to find flatter minima. The EEGNet (k=25) variant uses best-checkpoint weights (no SWA) to preserve error diversity. |
+| **Checkpointing** | Per-run, per-model, per-kernel, per-seed best, SWA-recalibrated, and selected state snapshots saved under `models/checkpoints/runs/`, with JSON metadata describing the evaluated state. |
+| **Reproducibility** | Stable model-specific seeds derived from the requested base seed, dedicated loader/augmentation RNGs, and `torch.backends.cudnn.deterministic = True` |
+| **SWA** | `AveragedModel` averages parameters from epoch 25 onward for ensemble EEGNet (k=15). BatchNorm buffers are recalibrated from clean fitting data only; best and SWA candidates are compared on development data. EEGNet (k=25) uses its best checkpoint. |
 | **Hardware** | CUDA GPU, Apple Silicon MPS, or CPU fallback |
 | **Test-Time BN Adaptation** | Disabled. Evaluation is strictly inductive: model state and buffers remain frozen, and no evaluation-cohort statistics are used. |
 
@@ -205,7 +205,7 @@ The pipeline employs multiple orthogonal regularization strategies:
 7. **Weight Decay (0.05):** L2 regularisation on all parameters via AdamW.
 8. **ReduceLROnPlateau:** Halves the learning rate when validation loss plateaus for 3 epochs, allowing the model to settle into finer minima.
 9. **Batch Size (64):** Smaller batches introduce beneficial gradient noise that acts as an implicit regulariser.
-10. **Stochastic Weight Averaging (SWA):** Applied to the primary EEGNet (k=15) in ensemble mode starting from epoch 25. Maintains a running average of model weights rather than using a single best checkpoint. This finds flatter minima that generalise better, improving EEGNet single-model accuracy. The k=25 variant uses best-checkpoint weights to preserve inter-model error diversity.
+10. **Stochastic Weight Averaging (SWA):** Applied to the primary EEGNet (k=15) in ensemble mode starting from epoch 25 with `AveragedModel(use_buffers=False)`. Its BatchNorm buffers are recalibrated using clean fitting-partition inputs only. Best-checkpoint and recalibrated SWA candidates are compared individually and in the ensemble on development data; the selected candidate is recorded in metadata. The k=25 variant uses best-checkpoint weights.
 11. **Inductive Evaluation:** Development and explicit final-test evaluators run models in evaluation mode with no gradient or BatchNorm-statistics update. Test-time adaptation is not part of the protocol.
 
 ---
@@ -246,9 +246,9 @@ These differences mean the models make **different kinds of errors**. When one m
 
 ## Results
 
-All results are **deterministic and reproducible** (seed 42, deterministic cuDNN).
+All results are **deterministic and reproducible** for a fixed base seed and configuration. The table below records the accepted V5.6.2 baseline.
 
-### Single-Model Performance
+### Accepted V5.6.2 Baseline — Single-Model Performance
 
 | Model | Test Accuracy | Parameters | Key Configuration |
 |-------|:---:|:---:|---|
@@ -259,14 +259,14 @@ All results are **deterministic and reproducible** (seed 42, deterministic cuDNN
 | EEGNet (k=25, no SWA) | 16.67% | 157,344 | 250 Hz, mixup+noise, kernel=25 |
 | EEGInception | 16.67% | 243,655 | 250 Hz, mixup, kernels=(7,5,3) |
 
-### Ensemble Performance
+### Accepted V5.6.2 Baseline — Ensemble Performance
 
 | Configuration | Test Accuracy |
 |-------|:---:|
 | DCN + EEGNet (k=15) — 2-model baseline | 21.79% |
 | **DCN + EEGNet (k=15) + EEGNet (k=25) — 3-model** | **22.18%** |
 
-The historical scores in this section are retained as prior measurements only. New development comparisons use the frozen split manifest and inductive evaluation; they do not feed test results or test-cohort statistics back into training or selection.
+The accepted baseline tables above are retained for comparison. The point-3 regression run measured 23.72% with independent model RNG streams, validation-selected SWA plus fitting-only BatchNorm recalibration, and no test-cohort adaptation.
 
 ### Temporal Kernel Ablation
 
@@ -347,8 +347,9 @@ python src/train.py --model ensemble --fast --quick 10
 | `--evaluate-test` | Evaluate the fixed test partition after the recipe is locked | Explicit opt-in |
 | `--split-manifest` | Frozen split manifest path | `data/split_manifest.json` |
 | `--write-split-manifest` | Create the manifest and exit without training | `False` |
+| `--run-id` | Directory name for saved run artifacts | Timestamped |
 
-Note: Stochastic Weight Averaging (SWA) remains baked into the ensemble pipeline by default for the primary EEGNet (k=15) — no flag required. The k=25 variant uses best-checkpoint weights for error diversity. Both development and final-test evaluation are inductive; test-time BatchNorm adaptation is disabled.
+Note: Stochastic Weight Averaging (SWA) uses `AveragedModel` for the primary EEGNet (k=15). Its BatchNorm buffers are recalibrated from clean fitting data only, and best/SWA candidates are selected using development validation. The k=25 variant uses its best checkpoint. Both development and final-test evaluation are inductive; test-time BatchNorm adaptation is disabled.
 
 ---
 

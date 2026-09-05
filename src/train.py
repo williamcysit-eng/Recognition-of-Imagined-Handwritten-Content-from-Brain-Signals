@@ -21,10 +21,12 @@ try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
-    from torch.utils.data import DataLoader
+    from torch.utils.data import DataLoader, TensorDataset
+    from torch.optim.swa_utils import AveragedModel
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+    AveragedModel = None
     print("PyTorch is not available. Deep learning models cannot be trained.")
 
 try:
@@ -63,6 +65,7 @@ def select_device(force_cpu=False):
 SPLIT_MANIFEST_VERSION = 1
 SPLIT_POLICY = "classwise_index_block_v1"
 DEFAULT_SPLIT_MANIFEST_PATH = os.path.join(ROOT_DIR, "data", "split_manifest.json")
+DEFAULT_CHECKPOINT_ROOT = os.path.join(ROOT_DIR, "models", "checkpoints", "runs")
 
 
 def _fingerprint_array(values):
@@ -100,6 +103,183 @@ def _find_acquisition_metadata(dataset):
     }
     # Treat every additional archive field as provenance requiring inspection.
     return tuple(sorted(key for key in dataset.files if key not in known_keys))
+
+
+def derive_model_seed(base_seed, model_type, temporal_kernel=None, variant="default"):
+    """Derive a stable independent seed for one model configuration."""
+    token = f"{int(base_seed)}:{model_type}:{temporal_kernel}:{variant}".encode("utf-8")
+    digest = hashlib.sha256(token).digest()
+    return int.from_bytes(digest[:4], byteorder="big") % (2**31 - 1) or 1
+
+
+def _normalise_run_id(run_id):
+    value = run_id or "manual"
+    if (
+        value in {".", ".."}
+        or os.path.basename(value) != value
+        or os.sep in value
+        or (os.altsep and os.altsep in value)
+    ):
+        raise ValueError("run_id must be a single safe directory name")
+    return value
+
+
+def _artifact_paths(
+    model_type, temporal_kernel, seed, run_id=None, artifact_root=None
+):
+    run_id = _normalise_run_id(run_id)
+    seed = int(seed)
+    artifact_kernel = (
+        15 if model_type == "deep_conv_net" else temporal_kernel
+    )
+    model_name = (
+        f"{model_type}_k{int(artifact_kernel)}"
+        if artifact_kernel is not None and model_type != "eeg_inception"
+        else model_type
+    )
+    artifact_dir = os.path.join(
+        artifact_root or DEFAULT_CHECKPOINT_ROOT,
+        run_id,
+        f"seed_{seed}",
+    )
+    stem = f"{model_name}_seed_{seed}"
+    return {
+        "directory": artifact_dir,
+        "best": os.path.join(artifact_dir, f"{stem}_best.pth"),
+        "swa": os.path.join(artifact_dir, f"{stem}_swa_bn_recalibrated.pth"),
+        "selected": os.path.join(artifact_dir, f"{stem}_selected.pth"),
+        "metadata": os.path.join(artifact_dir, f"{stem}_metadata.json"),
+        "model_name": model_name,
+        "temporal_kernel": (
+            int(artifact_kernel) if artifact_kernel is not None else None
+        ),
+        "run_id": run_id,
+        "seed": seed,
+    }
+
+
+def _checkpoint_state_dict(model):
+    """Create a portable CPU snapshot of exactly the model being saved."""
+    return {
+        name: value.detach().cpu().clone()
+        for name, value in model.state_dict().items()
+    }
+
+
+def _save_checkpoint(model, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(_checkpoint_state_dict(model), path)
+
+
+def _build_model(model_type, channels_count, time_points_count, temporal_kernel, device):
+    if model_type == "deep_conv_net":
+        model = DeepConvNet(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            temporal_kernel=15,
+            dropout_rate=0.5,
+        )
+    elif model_type == "eegnet":
+        model = EEGNet82(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            temporal_kernel_length=temporal_kernel,
+            dropout_rate=0.3,
+        )
+    elif model_type == "eeg_inception":
+        model = EEGInception(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            dropout_rate=0.3,
+        )
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+    model = model.to(device)
+    if device.type == "cpu":
+        model = model.to(memory_format=torch.channels_last)
+    return model
+
+
+def _evaluate_model_metrics(model, X_eval, y_eval, device, criterion):
+    eval_dataset = EEGDataset(X_eval, y_eval)
+    eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
+    model.eval()
+    total_loss, correct, total = 0.0, 0, 0
+    with torch.no_grad():
+        for batch_x, batch_y in eval_loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            outputs = model(batch_x)
+            total_loss += criterion(outputs, batch_y).item() * batch_y.size(0)
+            correct += outputs.argmax(dim=1).eq(batch_y).sum().item()
+            total += batch_y.size(0)
+    return {
+        "loss": total_loss / total,
+        "accuracy": (correct / total) * 100,
+    }
+
+
+def _recalibrate_batchnorm(model, X_train, device, batch_size=128):
+    """Refresh BN buffers from clean fitting data while keeping dropout off."""
+    batch_norms = [
+        module
+        for module in model.modules()
+        if isinstance(module, nn.modules.batchnorm._BatchNorm)
+    ]
+    if not batch_norms:
+        model.eval()
+        return 0
+
+    training_states = {
+        module: module.training for module in model.modules()
+    }
+    momenta = {module: module.momentum for module in batch_norms}
+    try:
+        model.eval()
+        for batch_norm in batch_norms:
+            batch_norm.reset_running_stats()
+            batch_norm.momentum = None
+            batch_norm.train()
+
+        train_tensor = torch.as_tensor(
+            X_train, dtype=torch.float32
+        ).unsqueeze(1)
+        train_loader = DataLoader(
+            TensorDataset(train_tensor),
+            batch_size=batch_size,
+            shuffle=False,
+        )
+        with torch.no_grad():
+            for (batch_x,) in train_loader:
+                model(batch_x.to(device))
+    finally:
+        for module, training in training_states.items():
+            module.train(training)
+        for batch_norm, momentum in momenta.items():
+            batch_norm.momentum = momentum
+    return len(train_loader)
+
+
+def _record_selected_artifact(
+    artifact_info,
+    selected_model,
+    selected_name,
+    selection_scope,
+    selection_metrics=None,
+):
+    """Persist the candidate that the caller actually evaluates."""
+    _save_checkpoint(selected_model, artifact_info["selected"])
+    with open(artifact_info["metadata"], "r", encoding="utf-8") as metadata_file:
+        metadata = json.load(metadata_file)
+    metadata["selected_candidate"] = selected_name
+    metadata["selection_scope"] = selection_scope
+    if selection_metrics is not None:
+        metadata["ensemble_candidate_validation"] = selection_metrics
+    with open(artifact_info["metadata"], "w", encoding="utf-8") as metadata_file:
+        json.dump(metadata, metadata_file, indent=2)
+    artifact_info["selected_candidate"] = selected_name
 
 
 def _build_classwise_split_indices(labels):
@@ -330,252 +510,360 @@ def load_and_split_data_pipeline(
 # -----------------------------------------------------------------------------
 # 2. General Training Loop
 # -----------------------------------------------------------------------------
-def train_deep_learning_model(model_type, X_train, y_train, X_val, y_val, 
-                              channels_count, time_points_count, num_epochs=15, 
-                              batch_size=64, lr=0.005, temporal_kernel=64,
-                              use_mixup=False, mixup_alpha=0.2, noise_std=0.0,
-                              use_swa=False, swa_start_epoch=30,
-                              force_cpu=False, quick_epochs=0,
-                              cpu_threads=None):
+def train_deep_learning_model(
+    model_type,
+    X_train,
+    y_train,
+    X_val,
+    y_val,
+    channels_count,
+    time_points_count,
+    num_epochs=15,
+    batch_size=64,
+    lr=0.005,
+    temporal_kernel=64,
+    use_mixup=False,
+    mixup_alpha=0.2,
+    noise_std=0.0,
+    use_swa=False,
+    swa_start_epoch=30,
+    force_cpu=False,
+    quick_epochs=0,
+    cpu_threads=None,
+    seed=None,
+    run_id=None,
+    artifact_root=None,
+    return_candidates=False,
+):
     """
-    Trains a deep learning model with validation-based checkpointing.
+    Train one model, validate best and SWA candidates, and save exact artifacts.
+
+    SWA averages parameters with ``AveragedModel`` and recalibrates BatchNorm
+    buffers from clean fitting data only. Candidate selection never uses test
+    data.
     """
     if quick_epochs > 0:
         num_epochs = quick_epochs
+    training_seed = RANDOM_SEED if seed is None else int(seed)
+    set_seed(training_seed)
     device = select_device(force_cpu)
     is_cpu = device.type == "cpu"
     print(f"\nInitializing {model_type.upper()} on device: {device}")
-    
+
     if is_cpu:
         torch.backends.mkldnn.enabled = True
-        num_threads = cpu_threads if cpu_threads is not None else (max(1, os.cpu_count() - 2) if os.cpu_count() else 4)
+        num_threads = (
+            cpu_threads
+            if cpu_threads is not None
+            else (max(1, os.cpu_count() - 2) if os.cpu_count() else 4)
+        )
         torch.set_num_threads(num_threads)
         print(f"CPU optimizations: MKL-DNN enabled, {num_threads} threads")
-    
+
     if use_mixup:
         print(f"Applying Mixup Augmentation (alpha={mixup_alpha}) during training...")
     if use_swa:
         print(f"SWA enabled: averaging weights from epoch {swa_start_epoch}")
-    
-    if model_type == "deep_conv_net":
-        dcn_kernel = 15  # 60ms at 250Hz
-        model = DeepConvNet(
-            num_channels=channels_count,
-            num_classes=26,
-            input_time_points=time_points_count,
-            temporal_kernel=dcn_kernel,
-            dropout_rate=0.5
-        ).to(device)
-        best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_deep_conv_net.pth")
-    elif model_type == "eegnet":
-        model = EEGNet82(
-            num_channels=channels_count,
-            num_classes=26,
-            input_time_points=time_points_count,
-            temporal_kernel_length=temporal_kernel,
-            dropout_rate=0.3
-        ).to(device)
-        best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_eegnet.pth")
-    elif model_type == "eeg_inception":
-        model = EEGInception(
-            num_channels=channels_count,
-            num_classes=26,
-            input_time_points=time_points_count,
-            dropout_rate=0.3
-        ).to(device)
-        best_model_path = os.path.join(ROOT_DIR, "models", "checkpoints", "best_eeg_inception.pth")
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-        
-    os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+        if AveragedModel is None:
+            raise RuntimeError("PyTorch SWA utilities are unavailable")
+
+    model = _build_model(
+        model_type,
+        channels_count,
+        time_points_count,
+        temporal_kernel,
+        device,
+    )
+    artifacts = _artifact_paths(
+        model_type,
+        temporal_kernel,
+        training_seed,
+        run_id=run_id,
+        artifact_root=artifact_root,
+    )
+    os.makedirs(artifacts["directory"], exist_ok=True)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    
-    if is_cpu:
-        model = model.to(memory_format=torch.channels_last)
-    
-    # Datasets and Loaders
+    print(f"Checkpoint artifacts: {artifacts['directory']}")
+
+    loader_generator = torch.Generator(device="cpu")
+    loader_generator.manual_seed(training_seed + 1)
+    augmentation_generator = torch.Generator(device=device)
+    augmentation_generator.manual_seed(training_seed + 2)
+    numpy_rng = np.random.default_rng(training_seed + 3)
+
     train_dataset = EEGDataset(X_train, y_train)
     val_dataset = EEGDataset(X_val, y_val)
     dl_kwargs = dict(num_workers=2, persistent_workers=True) if is_cpu else {}
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **dl_kwargs)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **dl_kwargs)
-    
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.0 if model_type == "deep_conv_net" else 0.1)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=loader_generator,
+        **dl_kwargs,
+    )
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+    criterion = nn.CrossEntropyLoss(
+        label_smoothing=0.0 if model_type == "deep_conv_net" else 0.1
+    )
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode='min',
-        factor=0.5, 
+        optimizer,
+        mode="min",
+        factor=0.5,
         patience=3,
-        min_lr=1e-6
+        min_lr=1e-6,
     )
-    
-    best_val_loss = float('inf')
+
+    best_val_loss = float("inf")
     best_epoch = 1
-    
-    # Early Stopping config
-    patience = 40
     epochs_no_improve = 0
-    
-    # SWA tracking
-    swa_state_dict = None
-    swa_n = 0
-    
+    patience = 40
+    swa_model = AveragedModel(model, use_buffers=False) if use_swa else None
+
     history = {
-        'train_loss': [], 'train_acc': [],
-        'val_loss': [], 'val_acc': []
+        "train_loss": [],
+        "train_acc": [],
+        "val_loss": [],
+        "val_acc": [],
     }
-    
-    print(f"\nStarting {model_type.upper()} Training Loop...")
+
+    print("\nStarting {} Training Loop...".format(model_type.upper()))
     print("-" * 70)
-    print(f"{'Epoch':<8}{'Train Loss':<12}{'Train Acc (%)':<15}{'Val Loss':<12}{'Val Acc (%)':<15}{'Time (s)':<8}")
+    print(
+        f"{'Epoch':<8}{'Train Loss':<12}{'Train Acc (%)':<15}"
+        f"{'Val Loss':<12}{'Val Acc (%)':<15}{'Time (s)':<8}"
+    )
     print("-" * 70)
-    
+
     for epoch in range(1, num_epochs + 1):
         t0 = time.time()
-        
-        # Training Phase
         model.train()
         train_loss = 0.0
         correct_train = 0
         total_train = 0
-        
+
         for batch_x, batch_y in train_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             if is_cpu:
                 batch_x = batch_x.to(memory_format=torch.channels_last)
-            
-            # Gaussian noise augmentation for EEG signals
+
             if noise_std > 0:
-                batch_x = batch_x + torch.randn_like(batch_x) * noise_std
-            
+                noise = torch.randn(
+                    batch_x.shape,
+                    dtype=batch_x.dtype,
+                    device=device,
+                    generator=augmentation_generator,
+                )
+                batch_x = batch_x + noise * noise_std
+
             optimizer.zero_grad(set_to_none=True)
-            
+
             if use_mixup and mixup_alpha > 0:
-                lam = np.random.beta(mixup_alpha, mixup_alpha)
+                lam = float(numpy_rng.beta(mixup_alpha, mixup_alpha))
                 batch_size_curr = batch_x.size(0)
-                index = torch.randperm(batch_size_curr, device=device)
-                
+                index = torch.randperm(
+                    batch_size_curr,
+                    device=device,
+                    generator=augmentation_generator,
+                )
                 mixed_x = lam * batch_x + (1 - lam) * batch_x[index]
                 outputs = model(mixed_x)
-                
-                loss = lam * criterion(outputs, batch_y) + (1 - lam) * criterion(outputs, batch_y[index])
-                
+                loss = lam * criterion(outputs, batch_y) + (
+                    1 - lam
+                ) * criterion(outputs, batch_y[index])
                 _, predicted = outputs.max(1)
-                correct_train += lam * predicted.eq(batch_y).sum().item() + (1 - lam) * predicted.eq(batch_y[index]).sum().item()
+                correct_train += (
+                    lam * predicted.eq(batch_y).sum().item()
+                    + (1 - lam) * predicted.eq(batch_y[index]).sum().item()
+                )
             else:
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
-                
                 _, predicted = outputs.max(1)
                 correct_train += predicted.eq(batch_y).sum().item()
-                
+
             loss.backward()
             optimizer.step()
-            
-            # EEGNet-specific Max-Norm constraints step
+
             if model_type == "eegnet":
                 apply_max_norm_constraints(model)
-                
+
             train_loss += loss.item() * batch_x.size(0)
             total_train += batch_y.size(0)
-            
+
         epoch_train_loss = train_loss / total_train
         epoch_train_acc = (correct_train / total_train) * 100
-        
-        # Validation Phase
+
         model.eval()
         val_loss = 0.0
         correct_val = 0
         total_val = 0
-        
         with torch.no_grad():
             for batch_x, batch_y in val_loader:
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
-                
                 val_loss += loss.item() * batch_x.size(0)
                 _, predicted = outputs.max(1)
                 correct_val += predicted.eq(batch_y).sum().item()
                 total_val += batch_y.size(0)
-                
+
         epoch_val_loss = val_loss / total_val
         epoch_val_acc = (correct_val / total_val) * 100
         epoch_time = time.time() - t0
-        
-        # Log history
-        history['train_loss'].append(epoch_train_loss)
-        history['train_acc'].append(epoch_train_acc)
-        history['val_loss'].append(epoch_val_loss)
-        history['val_acc'].append(epoch_val_acc)
-        
+        history["train_loss"].append(epoch_train_loss)
+        history["train_acc"].append(epoch_train_acc)
+        history["val_loss"].append(epoch_val_loss)
+        history["val_acc"].append(epoch_val_acc)
         scheduler.step(epoch_val_loss)
-        
-        # SWA weight averaging (start after warmup)
-        if use_swa and epoch >= swa_start_epoch:
-            if swa_state_dict is None:
-                swa_state_dict = {k: v.clone().detach() for k, v in model.state_dict().items()}
-                swa_n = 1
-            else:
-                for k in swa_state_dict:
-                    swa_state_dict[k] = (swa_state_dict[k] * swa_n + model.state_dict()[k].detach()) / (swa_n + 1)
-                swa_n += 1
-        
-        print(f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{epoch_time:<8.1f}")
-        
-        # Validation loss checkpointing & Early Stopping
+
+        if swa_model is not None and epoch >= swa_start_epoch:
+            swa_model.update_parameters(model)
+
+        print(
+            f"{epoch:<8}{epoch_train_loss:<12.4f}{epoch_train_acc:<15.2f}"
+            f"{epoch_val_loss:<12.4f}{epoch_val_acc:<15.2f}{epoch_time:<8.1f}"
+        )
+
         if epoch_val_loss < best_val_loss:
             best_val_loss = epoch_val_loss
             best_epoch = epoch
-            torch.save(model.state_dict(), best_model_path)
+            _save_checkpoint(model, artifacts["best"])
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
-            
+
         if epochs_no_improve >= patience:
-            print(f"Early stopping triggered! No improvement in validation loss for {patience} consecutive epochs.")
+            print(
+                "Early stopping triggered! No improvement in validation loss "
+                f"for {patience} consecutive epochs."
+            )
             break
-            
+
     print("-" * 70)
-    if use_swa and swa_state_dict is not None:
-        print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
-        print(f"Using SWA model (averaged {swa_n} checkpoints from epoch {swa_start_epoch} to {epoch})...")
+    print(
+        f"Best {model_type.upper()} live validation loss: {best_val_loss:.4f} "
+        f"(accuracy: {history['val_acc'][best_epoch - 1]:.2f}%) "
+        f"at epoch {best_epoch}"
+    )
+
+    if not os.path.exists(artifacts["best"]):
+        raise RuntimeError("Training produced no best validation checkpoint")
+
+    best_model = _build_model(
+        model_type,
+        channels_count,
+        time_points_count,
+        temporal_kernel,
+        device,
+    )
+    best_model.load_state_dict(
+        torch.load(artifacts["best"], map_location=device)
+    )
+    candidates = {"best": best_model}
+    candidate_validation = {
+        "best": _evaluate_model_metrics(
+            best_model, X_val, y_val, device, criterion
+        )
+    }
+    recalibration_batches = 0
+
+    if swa_model is not None:
+        averaged_epochs = int(swa_model.n_averaged.item())
+        if averaged_epochs > 0:
+            swa_candidate = swa_model.module
+            recalibration_batches = _recalibrate_batchnorm(
+                swa_candidate,
+                X_train,
+                device,
+            )
+            swa_candidate.eval()
+            _save_checkpoint(swa_candidate, artifacts["swa"])
+            candidates["swa"] = swa_candidate
+            candidate_validation["swa"] = _evaluate_model_metrics(
+                swa_candidate,
+                X_val,
+                y_val,
+                device,
+                criterion,
+            )
+        else:
+            averaged_epochs = 0
     else:
-        print(f"Best {model_type.upper()} Validation Loss: {best_val_loss:.4f} (Accuracy: {history['val_acc'][best_epoch-1]:.2f}%) achieved at Epoch {best_epoch}")
-        print(f"Loading optimal model weights from Epoch {best_epoch} (prevents overfitting)...")
-    
-    # Reload optimal model weights or use SWA
-    if model_type == "deep_conv_net":
-        dcn_kernel = 15
-        best_model = DeepConvNet(
-            num_channels=channels_count,
-            num_classes=26,
-            input_time_points=time_points_count,
-            temporal_kernel=dcn_kernel,
-            dropout_rate=0.5
-        ).to(device)
-    elif model_type == "eegnet":
-        best_model = EEGNet82(
-            num_channels=channels_count,
-            num_classes=26,
-            input_time_points=time_points_count,
-            temporal_kernel_length=temporal_kernel,
-            dropout_rate=0.3
-        ).to(device)
-    elif model_type == "eeg_inception":
-        best_model = EEGInception(
-            num_channels=channels_count,
-            num_classes=26,
-            input_time_points=time_points_count,
-            dropout_rate=0.3
-        ).to(device)
-    
-    if use_swa and swa_state_dict is not None:
-        best_model.load_state_dict(swa_state_dict)
-    else:
-        best_model.load_state_dict(torch.load(best_model_path, map_location=device))
-    return best_model, history, device
+        averaged_epochs = 0
+
+    selected_name = "best"
+    if "swa" in candidate_validation:
+        best_metrics = candidate_validation["best"]
+        swa_metrics = candidate_validation["swa"]
+        if (
+            swa_metrics["accuracy"] > best_metrics["accuracy"]
+            or (
+                swa_metrics["accuracy"] == best_metrics["accuracy"]
+                and swa_metrics["loss"] < best_metrics["loss"]
+            )
+        ):
+            selected_name = "swa"
+
+    selected_model = candidates[selected_name]
+    _save_checkpoint(selected_model, artifacts["selected"])
+    metadata = {
+        "artifact_version": 1,
+        "run_id": artifacts["run_id"],
+        "seed": artifacts["seed"],
+        "model_type": model_type,
+        "model_name": artifacts["model_name"],
+        "temporal_kernel": artifacts["temporal_kernel"],
+        "use_mixup": bool(use_mixup),
+        "mixup_alpha": float(mixup_alpha),
+        "noise_std": float(noise_std),
+        "swa": {
+            "enabled": bool(use_swa),
+            "start_epoch": int(swa_start_epoch),
+            "averaged_epochs": averaged_epochs,
+            "bn_recalibration": (
+                "clean_fitting_partition_only"
+                if "swa" in candidates
+                else None
+            ),
+            "bn_recalibration_batches": recalibration_batches,
+        },
+        "best_epoch": int(best_epoch),
+        "candidate_validation": candidate_validation,
+        "selected_candidate": selected_name,
+        "best_checkpoint": os.path.basename(artifacts["best"]),
+        "swa_checkpoint": (
+            os.path.basename(artifacts["swa"])
+            if "swa" in candidates
+            else None
+        ),
+        "selected_checkpoint": os.path.basename(artifacts["selected"]),
+        "selection_scope": "validation_only",
+    }
+    with open(artifacts["metadata"], "w", encoding="utf-8") as metadata_file:
+        json.dump(metadata, metadata_file, indent=2)
+
+    print(
+        f"Best-checkpoint validation accuracy: "
+        f"{candidate_validation['best']['accuracy']:.2f}%"
+    )
+    if "swa" in candidate_validation:
+        print(
+            "SWA + clean-training BN recalibration validation accuracy: "
+            f"{candidate_validation['swa']['accuracy']:.2f}%"
+        )
+    print(f"Selected validation candidate: {selected_name}")
+
+    artifact_info = {
+        **artifacts,
+        "candidate_validation": candidate_validation,
+        "selected_candidate": selected_name,
+        "swa_averaged_epochs": averaged_epochs,
+    }
+    if return_candidates:
+        return selected_model, history, device, candidates, artifact_info
+    return selected_model, history, device
 
 
 # -----------------------------------------------------------------------------
@@ -825,12 +1113,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Write a frozen split manifest and exit without training",
     )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Artifact run identifier (default: timestamped run directory)",
+    )
     args = parser.parse_args()
 
     if args.downsample < 1:
         parser.error("--downsample must be a positive integer")
     if args.quick < 0:
         parser.error("--quick must be non-negative")
+    run_id = args.run_id or f"run_{time.strftime('%Y%m%d_%H%M%S')}"
 
     set_seed(args.seed)
 
@@ -889,6 +1183,12 @@ if __name__ == "__main__":
         models_to_train.append("eeg_inception")
 
     for model_type in models_to_train:
+        model_seed = derive_model_seed(
+            args.seed,
+            model_type,
+            temporal_kernel_len,
+            variant="standalone",
+        )
         model, history, device = train_deep_learning_model(
             model_type=model_type,
             X_train=X_train,
@@ -905,6 +1205,9 @@ if __name__ == "__main__":
             mixup_alpha=args.mixup_alpha,
             noise_std=args.noise_std,
             quick_epochs=args.quick,
+            seed=model_seed,
+            run_id=run_id,
+            artifact_root=DEFAULT_CHECKPOINT_ROOT,
         )
         results[model_type] = evaluate_model_on_split(
             model_type,
@@ -919,131 +1222,144 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print("  Training Ensemble: DeepConvNet + EEGNet")
         print("=" * 60)
+
+        dcn_seed = derive_model_seed(
+            args.seed,
+            "deep_conv_net",
+            temporal_kernel_len,
+            variant="ensemble",
+        )
+        eeg_seed = derive_model_seed(
+            args.seed,
+            "eegnet",
+            15,
+            variant="ensemble_swa",
+        )
+        k25_seed = derive_model_seed(
+            args.seed,
+            "eegnet",
+            25,
+            variant="ensemble_k25",
+        )
+        cpu_threads = (
+            max(1, os.cpu_count() - 2)
+            if args.cpu and os.cpu_count()
+            else None
+        )
         if args.cpu:
-            print("Launching parallel CPU training (DCN + EEGNet in parallel threads)...")
-            from concurrent.futures import ThreadPoolExecutor
-
-            parallel_threads = (
-                max(1, (os.cpu_count() - 2) // 2) if os.cpu_count() else 2
+            print(
+                "Launching sequential CPU training so each model has an "
+                "isolated deterministic RNG stream..."
             )
 
-            def _train_dcn():
-                os.environ["CUDA_VISIBLE_DEVICES"] = ""
-                return train_deep_learning_model(
-                    model_type="deep_conv_net",
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_val=X_val,
-                    y_val=y_val,
-                    channels_count=channels_count,
-                    time_points_count=time_points_count,
-                    num_epochs=args.epochs,
-                    batch_size=64,
-                    lr=0.005,
-                    temporal_kernel=temporal_kernel_len,
-                    use_mixup=False,
-                    mixup_alpha=0.2,
-                    noise_std=0.0,
-                    force_cpu=True,
-                    quick_epochs=args.quick,
-                    cpu_threads=parallel_threads,
+        (
+            dcn_model,
+            dcn_history,
+            device,
+            dcn_candidates,
+            dcn_artifacts,
+        ) = train_deep_learning_model(
+            model_type="deep_conv_net",
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            channels_count=channels_count,
+            time_points_count=time_points_count,
+            num_epochs=args.epochs,
+            batch_size=64,
+            lr=0.005,
+            temporal_kernel=temporal_kernel_len,
+            use_mixup=False,
+            mixup_alpha=0.2,
+            noise_std=0.0,
+            force_cpu=args.cpu,
+            quick_epochs=args.quick,
+            cpu_threads=cpu_threads,
+            seed=dcn_seed,
+            run_id=run_id,
+            artifact_root=DEFAULT_CHECKPOINT_ROOT,
+            return_candidates=True,
+        )
+        (
+            eeg_model,
+            eeg_history,
+            _,
+            eeg_candidates,
+            eeg_artifacts,
+        ) = train_deep_learning_model(
+            model_type="eegnet",
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            channels_count=channels_count,
+            time_points_count=time_points_count,
+            num_epochs=args.epochs,
+            batch_size=64,
+            lr=0.005,
+            temporal_kernel=15,
+            use_mixup=True,
+            mixup_alpha=0.2,
+            noise_std=0.07,
+            use_swa=True,
+            swa_start_epoch=25,
+            force_cpu=args.cpu,
+            quick_epochs=args.quick,
+            cpu_threads=cpu_threads,
+            seed=eeg_seed,
+            run_id=run_id,
+            artifact_root=DEFAULT_CHECKPOINT_ROOT,
+            return_candidates=True,
+        )
+
+        print("\n--- EEGNET K=15 DEVELOPMENT CANDIDATE COMPARISON ---")
+        eeg_candidate_validation = {}
+        for candidate_name, candidate_model in eeg_candidates.items():
+            eeg_candidate_validation[candidate_name] = evaluate_model_on_split(
+                f"eegnet_k15_{candidate_name}",
+                candidate_model,
+                X_val,
+                y_val,
+                device,
+                split_name="development",
+            )
+
+        print("\n--- DCN + EEGNET K=15 DEVELOPMENT CANDIDATE COMPARISON ---")
+        ensemble_candidate_validation = {}
+        for candidate_name, candidate_model in eeg_candidates.items():
+            ensemble_candidate_validation[candidate_name] = (
+                evaluate_ensemble_on_split(
+                    dcn_model,
+                    candidate_model,
+                    X_val,
+                    y_val,
+                    device,
+                    split_name="development",
+                    name_a="DCN",
+                    name_b=f"EEGNet k15 {candidate_name}",
                 )
+            )
 
-            def _train_eeg():
-                os.environ["CUDA_VISIBLE_DEVICES"] = ""
-                return train_deep_learning_model(
-                    model_type="eegnet",
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_val=X_val,
-                    y_val=y_val,
-                    channels_count=channels_count,
-                    time_points_count=time_points_count,
-                    num_epochs=args.epochs,
-                    batch_size=64,
-                    lr=0.005,
-                    temporal_kernel=15,
-                    use_mixup=True,
-                    mixup_alpha=0.2,
-                    noise_std=0.07,
-                    use_swa=True,
-                    swa_start_epoch=25,
-                    force_cpu=True,
-                    quick_epochs=args.quick,
-                    cpu_threads=parallel_threads,
-                )
-
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                dcn_future = executor.submit(_train_dcn)
-                eeg_future = executor.submit(_train_eeg)
-                dcn_model, dcn_history, _ = dcn_future.result()
-                eeg_model, eeg_history, device = eeg_future.result()
-
-            device = torch.device("cpu")
-            ckpt_dir = os.path.join(ROOT_DIR, "models", "checkpoints")
-            dcn_model = DeepConvNet(
-                num_channels=channels_count,
-                num_classes=26,
-                input_time_points=time_points_count,
-                temporal_kernel=15,
-                dropout_rate=0.5,
-            ).to(device)
-            dcn_model.load_state_dict(
-                torch.load(
-                    os.path.join(ckpt_dir, "best_deep_conv_net.pth"),
-                    map_location=device,
-                )
-            )
-            eeg_model = EEGNet82(
-                num_channels=channels_count,
-                num_classes=26,
-                input_time_points=time_points_count,
-                temporal_kernel_length=15,
-                dropout_rate=0.3,
-            ).to(device)
-            eeg_model.load_state_dict(
-                torch.load(
-                    os.path.join(ckpt_dir, "best_eegnet.pth"),
-                    map_location=device,
-                )
-            )
-        else:
-            dcn_model, dcn_history, device = train_deep_learning_model(
-                model_type="deep_conv_net",
-                X_train=X_train,
-                y_train=y_train,
-                X_val=X_val,
-                y_val=y_val,
-                channels_count=channels_count,
-                time_points_count=time_points_count,
-                num_epochs=args.epochs,
-                batch_size=64,
-                lr=0.005,
-                temporal_kernel=temporal_kernel_len,
-                use_mixup=False,
-                mixup_alpha=0.2,
-                noise_std=0.0,
-                quick_epochs=args.quick,
-            )
-            eeg_model, eeg_history, _ = train_deep_learning_model(
-                model_type="eegnet",
-                X_train=X_train,
-                y_train=y_train,
-                X_val=X_val,
-                y_val=y_val,
-                channels_count=channels_count,
-                time_points_count=time_points_count,
-                num_epochs=args.epochs,
-                batch_size=64,
-                lr=0.005,
-                temporal_kernel=15,
-                use_mixup=True,
-                mixup_alpha=0.2,
-                noise_std=0.07,
-                use_swa=True,
-                swa_start_epoch=25,
-                quick_epochs=args.quick,
-            )
+        selected_eeg_name = "best"
+        if (
+            "swa" in ensemble_candidate_validation
+            and ensemble_candidate_validation["swa"]
+            > ensemble_candidate_validation["best"]
+        ):
+            selected_eeg_name = "swa"
+        eeg_model = eeg_candidates[selected_eeg_name]
+        _record_selected_artifact(
+            eeg_artifacts,
+            eeg_model,
+            selected_eeg_name,
+            selection_scope="ensemble_validation_only",
+            selection_metrics=ensemble_candidate_validation,
+        )
+        print(
+            "Selected EEGNet k=15 candidate from ensemble validation: "
+            f"{selected_eeg_name}"
+        )
 
         results["deep_conv_net"] = evaluate_model_on_split(
             "deep_conv_net",
@@ -1070,7 +1386,13 @@ if __name__ == "__main__":
             split_name=evaluation_name,
         )
 
-        eeg_k25_model, _, _ = train_deep_learning_model(
+        (
+            eeg_k25_model,
+            _,
+            _,
+            _,
+            _,
+        ) = train_deep_learning_model(
             model_type="eegnet",
             X_train=X_train,
             y_train=y_train,
@@ -1087,7 +1409,13 @@ if __name__ == "__main__":
             noise_std=0.07,
             use_swa=False,
             swa_start_epoch=25,
+            force_cpu=args.cpu,
             quick_epochs=args.quick,
+            cpu_threads=cpu_threads,
+            seed=k25_seed,
+            run_id=run_id,
+            artifact_root=DEFAULT_CHECKPOINT_ROOT,
+            return_candidates=True,
         )
         results["eegnet_k25"] = evaluate_model_on_split(
             "eegnet_k25",
