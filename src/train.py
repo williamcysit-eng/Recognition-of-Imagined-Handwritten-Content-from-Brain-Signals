@@ -1209,7 +1209,7 @@ if __name__ == "__main__":
         write_split_manifest(npz_path, args.split_manifest)
         sys.exit(0)
 
-    X_train, y_train, X_val, y_val, X_test, y_test, _, _ = (
+    X_train, y_train, X_val, y_val, X_test, y_test, _channels, time_points = (
         load_and_split_data_pipeline(
             npz_path,
             downsample_factor=args.downsample,
