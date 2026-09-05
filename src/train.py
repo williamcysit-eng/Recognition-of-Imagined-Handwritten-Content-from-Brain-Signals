@@ -12,8 +12,13 @@ ROOT_DIR = os.path.dirname(SRC_DIR)
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
-# Import models and custom dataset
-from models import EEGNet82, apply_max_norm_constraints, DeepConvNet, EEGInception
+from models import (
+    EEGNet82,
+    apply_max_norm_constraints,
+    DeepConvNet,
+    EEGInception,
+    PositionPreservingDeepConvNet,
+)
 from src.extract import EEGDataset
 
 # Try to import PyTorch and scikit-learn
@@ -179,6 +184,13 @@ def _build_model(model_type, channels_count, time_points_count, temporal_kernel,
             input_time_points=time_points_count,
             temporal_kernel=15,
             dropout_rate=0.5,
+        )
+    elif model_type == "compressed_deep_conv_net":
+        model = PositionPreservingDeepConvNet(
+            num_channels=channels_count,
+            num_classes=26,
+            input_time_points=time_points_count,
+            temporal_kernel=15,
         )
     elif model_type == "eegnet":
         model = EEGNet82(
@@ -604,7 +616,11 @@ def train_deep_learning_model(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     criterion = nn.CrossEntropyLoss(
-        label_smoothing=0.0 if model_type == "deep_conv_net" else 0.1
+        label_smoothing=(
+            0.0
+            if model_type in {"deep_conv_net", "compressed_deep_conv_net"}
+            else 0.1
+        )
     )
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -1031,7 +1047,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        choices=["deep_conv_net", "eegnet", "eeg_inception", "ensemble", "all"],
+        choices=[
+            "deep_conv_net",
+            "compressed_deep_conv_net",
+            "eegnet",
+            "eeg_inception",
+            "ensemble",
+            "all",
+        ],
         default="deep_conv_net",
         help="Model architecture to train (default: deep_conv_net)",
     )
@@ -1181,6 +1204,8 @@ if __name__ == "__main__":
         models_to_train.append("eegnet")
     if args.model == "eeg_inception" or args.model == "all":
         models_to_train.append("eeg_inception")
+    if args.model == "compressed_deep_conv_net":
+        models_to_train.append("compressed_deep_conv_net")
 
     for model_type in models_to_train:
         model_seed = derive_model_seed(
