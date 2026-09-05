@@ -10,3 +10,4 @@ REFERENCE PAPER.pdf
 models/checkpoints/
 runs/
 Thesis/
+.DS_Store
