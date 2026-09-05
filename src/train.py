@@ -519,6 +519,37 @@ def load_and_split_data_pipeline(
     return X_train, y_train, X_val, y_val, X_test, y_test, channels, time_points
 
 
+TIME_WINDOWS_MS = {
+    "full": None,
+    "early": (0, 600),
+    "late": (600, 2800),
+}
+
+
+def select_time_window(data, time_points, window):
+    """Select a recorded-time window without using guessed sample indices."""
+    if window not in TIME_WINDOWS_MS:
+        raise ValueError(
+            f"unknown window {window!r}; expected one of "
+            f"{tuple(TIME_WINDOWS_MS)}"
+        )
+    time_points = np.asarray(time_points)
+    if time_points.ndim != 1 or data.shape[-1] != time_points.size:
+        raise ValueError("time_points must match the data time dimension")
+    bounds = TIME_WINDOWS_MS[window]
+    if bounds is None:
+        return data, time_points
+
+    start_ms, end_ms = bounds
+    if window == "early":
+        mask = (time_points >= start_ms) & (time_points < end_ms)
+    else:
+        mask = (time_points >= start_ms) & (time_points <= end_ms)
+    if not np.any(mask):
+        raise ValueError(f"window {window!r} contains no recorded time points")
+    return data[..., mask], time_points[mask]
+
+
 # -----------------------------------------------------------------------------
 # 2. General Training Loop
 # -----------------------------------------------------------------------------
@@ -1065,6 +1096,12 @@ if __name__ == "__main__":
         help="Downsampling factor for time series (default: 1)",
     )
     parser.add_argument(
+        "--window",
+        choices=tuple(TIME_WINDOWS_MS),
+        default="full",
+        help="Recorded-time ablation window (default: full)",
+    )
+    parser.add_argument(
         "--epochs",
         type=int,
         default=DEFAULT_EPOCHS,
@@ -1148,6 +1185,8 @@ if __name__ == "__main__":
     if args.quick < 0:
         parser.error("--quick must be non-negative")
     run_id = args.run_id or f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+    if args.window != "full":
+        run_id = f"{run_id}_{args.window}"
 
     set_seed(args.seed)
 
@@ -1184,6 +1223,19 @@ if __name__ == "__main__":
     else:
         X_eval, y_eval, evaluation_name = X_test, y_test, "test"
         print("\nExplicit final-test mode: evaluating the fixed held-out test partition.")
+    if args.window != "full":
+        full_time_points = time_points
+        X_train, time_points = select_time_window(
+            X_train, full_time_points, args.window
+        )
+        X_val, _ = select_time_window(X_val, full_time_points, args.window)
+        X_eval, _ = select_time_window(X_eval, full_time_points, args.window)
+        print(
+            f"Using {args.window} recorded-time window: "
+            f"{time_points[0]} to {time_points[-1]} ms "
+            f"({X_train.shape[-1]} samples)"
+        )
+
 
     channels_count = X_train.shape[1]
     time_points_count = X_train.shape[2]
