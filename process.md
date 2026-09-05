@@ -325,3 +325,55 @@ output = 0.455 * DCN_logits + 0.455 * EEGNet_k15_logits + 0.091 * EEGNet_k25_log
 #### Untried Approaches (for future work)
 
 Frequency-domain models (STFT/FFT features), per-frequency-band decomposition, temporal cropping augmentation, multi-checkpoint EEGNet bagging, validation-optimized ensemble weights (grid search), lightweight transformer for EEG.
+
+---
+
+### Part 9: Protocol Guard and Inductive Re-baseline (Session 2026-06-20)
+
+Suggested improvements 2.1–2.3 were implemented in `src/train.py` without committing the changes.
+
+#### Protocol Changes
+
+| Area | Implementation | Status |
+|------|----------------|:---:|
+| Development-only evaluation | `--development-only` is the default. It trains on the fitting partition, evaluates on validation, and does not materialize `X_test`/`y_test` for evaluation. `--evaluate-test` is an explicit opt-in. | ✅ |
+| Split provenance | Added `data/split_manifest.json`, containing the dataset fingerprint, channel/time-axis fingerprints, exact train/validation/test indices, partition counts, and class counts. Every run verifies the manifest before splitting. | ✅ |
+| Acquisition/session grouping | The archive contains no acquisition timestamps, session IDs, run IDs, or block IDs. The implementation therefore records the class-wise stored-index block as an approximation and fails closed if recognizable acquisition metadata appears without a verified group-aware splitter. | ⚠️ metadata unavailable |
+| Inductive inference | Evaluation uses `model.eval()` and `torch.no_grad()` only. No test-cohort BatchNorm updates, test-time adaptation, or evaluation-set fitting is performed. Logistic regression fits `StandardScaler` and the classifier on `X_train` only. | ✅ |
+
+The frozen partition is class-wise first 80% / next 10% / final 10% in stored archive order: 6,240 train, 780 validation, and 780 test samples. The available archive does not authenticate that order as acquisition chronology, so the manifest must not be described as a verified chronological or session split.
+
+#### Verification
+
+```text
+python -m py_compile src/train.py                         PASS
+python src/train.py --help                               PASS
+python src/train.py --write-split-manifest               PASS
+development loader include_test=False                    PASS
+mutated manifest membership                              REJECTED
+synthetic session_ids archive without group splitter      REJECTED
+buffer snapshot before/after inductive evaluation          IDENTICAL
+```
+
+The first one-epoch non-CPU CLI smoke exposed a missing `--quick` forwarding path; that wiring was corrected and the one-epoch development smoke was rerun successfully. It reported DCN validation accuracy 4.49% and logistic-regression validation accuracy 10.64%; these timing-smoke values are not comparable to a fully trained test result.
+
+#### Locked Inductive Test Re-baseline
+
+After the protocol was frozen, the following explicit final-test command was run once with seed 42:
+
+```bash
+python src/train.py --model ensemble --evaluate-test --seed 42
+```
+
+No test-time BatchNorm adaptation was used, and the test result was not used to tune the recipe.
+
+| Model / ensemble | Strict inductive test accuracy |
+|------------------|:---:|
+| DeepConvNet | 19.49% |
+| EEGNet (k=15, SWA) | 17.44% |
+| DCN + EEGNet (k=15) | 21.79% |
+| EEGNet (k=25, no SWA) | 18.72% |
+| DCN + EEGNet (k=15) + EEGNet (k=25) | **22.56%** |
+| Logistic regression | 13.72% |
+
+The three-model result is **22.56%**, which is **+0.38 percentage points** above the repository's approximately **22.18%** baseline. The two-model result is **21.79%**, matching the documented 21.79% two-model baseline. The older 26.03% result in the historical log used test-time BatchNorm adaptation and is not an apples-to-apples baseline under the new strict inductive protocol.

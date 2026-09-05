@@ -24,7 +24,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with only 300 training examples per class.
 
-The solution employs three specialised convolutional neural network architectures designed for EEG decoding, culminating in an ensemble that combines complementary model inductive biases with Stochastic Weight Averaging (SWA) to achieve **26.03% single-trial test accuracy** — substantially above the ~3.85% random-chance baseline.
+The solution employs three specialised convolutional neural network architectures designed for EEG decoding, culminating in an ensemble that combines complementary model inductive biases with Stochastic Weight Averaging (SWA) to achieve **22.18% single-trial test accuracy** — substantially above the ~3.85% random-chance baseline.
 
 ---
 
@@ -58,11 +58,11 @@ data/raw/data_EEG_AI.mat
 data/processed/eeg_dataset.npz
         │
         ▼
-  src/train.py            ← Stratified chronological split (80/10/10)
-        │                    Train model(s) with validation checkpointing
-        │                    Evaluate on held-out test set
+  src/train.py            ← Frozen split verification and model training
+        │                    Development evaluation by default
+        │                    Explicit final-test evaluation only when requested
         ▼
-  Final test accuracy report + saved .pth checkpoints
+  Development report + saved .pth checkpoints
 ```
 
 ---
@@ -77,23 +77,23 @@ Preprocessing is performed in `src/extract.py`:
 4. **Channel name extraction:** Cleans the cell array of 24 electrode labels.
 5. **Save as .npz:** Compressed NumPy archive for fast subsequent loading.
 
-The data is provided **already preprocessed** with major artifacts removed, baselined, and bandpass filtered between 0.1–45 Hz. Per-trial z-score normalization has also been applied by the data providers.
+The data is provided **already preprocessed** with major artifacts removed, baselined, and bandpass filtered between 0.1–45 Hz. Verify the provider's exact normalization and fitting scope before treating preprocessing as split-safe.
 
 ---
 
 ## Data Splitting Strategy
 
-The split uses a **class-wise chronological block split** (80% train / 10% validation / 10% test):
+The split uses a **class-wise stored-index block split** (80% train / 10% validation / 10% test):
 
 ```
 For each class (0–25):
-    Trials are ordered chronologically by acquisition time.
+    Trials follow stored archive order; acquisition chronology is not verified.
     First 80%  → Training set   (240 samples per class, 6,240 total)
     Next  10%  → Validation set  (30 samples per class,   780 total)
     Last  10%  → Test set        (30 samples per class,   780 total)
 ```
 
-**Rationale:** Chronological splitting preserves the physical acquisition order within each class, preventing temporal leakage between train and test. This is more rigorous than random shuffling because later sessions may have different signal characteristics (electrode impedance drift, fatigue effects).
+**Rationale:** `data/split_manifest.json` freezes the current membership and verifies the archive identity before training. The archive has no acquisition timestamps or session IDs, so this remains an index-block approximation rather than verified session separation.
 
 ---
 
@@ -177,7 +177,7 @@ All models share a common training infrastructure:
 | **Reproducibility** | Seed = 42, `torch.backends.cudnn.deterministic = True` |
 | **SWA** | Stochastic Weight Averaging baked into EEGNet (k=15, ensemble mode). Averages weights from epoch 25 onward to find flatter minima. The EEGNet (k=25) variant uses best-checkpoint weights (no SWA) to preserve error diversity. |
 | **Hardware** | CUDA GPU, Apple Silicon MPS, or CPU fallback |
-| **Test-Time BN Adaptation** | Applied to all ensemble models before inference. BN layers temporarily set to train mode to update running statistics on test data, correcting chronological distribution shift. Dropout remains frozen. |
+| **Test-Time BN Adaptation** | Disabled. Evaluation is strictly inductive: model state and buffers remain frozen, and no evaluation-cohort statistics are used. |
 
 ### Model-Specific Training Configurations
 
@@ -206,7 +206,7 @@ The pipeline employs multiple orthogonal regularization strategies:
 8. **ReduceLROnPlateau:** Halves the learning rate when validation loss plateaus for 3 epochs, allowing the model to settle into finer minima.
 9. **Batch Size (64):** Smaller batches introduce beneficial gradient noise that acts as an implicit regulariser.
 10. **Stochastic Weight Averaging (SWA):** Applied to the primary EEGNet (k=15) in ensemble mode starting from epoch 25. Maintains a running average of model weights rather than using a single best checkpoint. This finds flatter minima that generalise better, improving EEGNet single-model accuracy. The k=25 variant uses best-checkpoint weights to preserve inter-model error diversity.
-11. **Test-Time Batch Normalisation Adaptation:** Before ensemble inference, BN layers in all three models are temporarily set to train mode and updated with test-set statistics (no labels used). This corrects for the mild distribution shift introduced by the chronological train/test split. Dropout layers remain frozen in eval mode to preserve inference determinism.
+11. **Inductive Evaluation:** Development and explicit final-test evaluators run models in evaluation mode with no gradient or BatchNorm-statistics update. Test-time adaptation is not part of the protocol.
 
 ---
 
@@ -219,7 +219,7 @@ outputs = (5 * dcn_logits + 5 * eegnet_k15_logits + 1 * eegnet_k25_logits) / 11
 prediction = argmax(outputs)
 ```
 
-Test-time Batch Normalisation (BN) adaptation is applied to all three models before inference: BN layers are temporarily set to train mode and updated with test-set statistics, while dropout remains frozen in eval mode. This corrects for the mild distribution shift introduced by the chronological train/test split.
+The evaluation path is strictly inductive: each trial is processed by frozen model state, without BatchNorm adaptation or other updates using evaluation-cohort inputs.
 
 ### Multi-Kernel EEGNet Variant
 
@@ -238,9 +238,9 @@ DeepConvNet and the two EEGNet variants have fundamentally different inductive b
 | Augmentations | None | Mixup + Gaussian noise | Mixup + Gaussian noise |
 | Weight averaging | N/A | SWA (epoch 25+) | Best checkpoint |
 
-These differences mean the models make **different kinds of errors**. When one model is uncertain or incorrect, the others often compensate. The multi-kernel approach adds temporal-scale diversity — the 60ms kernel captures fast handwriting-imagery dynamics while the 100ms kernel captures slower ERP components. This error decorrelation yields +4.74% over the best single model.
+These differences mean the models make **different kinds of errors**. When one model is uncertain or incorrect, the others often compensate. The multi-kernel approach adds temporal-scale diversity — the 60ms kernel captures fast handwriting-imagery dynamics while the 100ms kernel captures slower ERP components. This error decorrelation yields +2.69% over the best single model.
 
-**The ensemble is not a multi-trial method** — each model processes the same single test trial independently, and their logits are averaged. No additional trial information is introduced at test time. Test-time BN adaptation uses only the unlabelled test data to correct distribution shift, without accessing test labels.
+**The ensemble is not a multi-trial method** — each model processes the same trial independently, and their logits are averaged. No additional trial information or evaluation-cohort adaptation is introduced at inference.
 
 ---
 
@@ -253,20 +253,20 @@ All results are **deterministic and reproducible** (seed 42, deterministic cuDNN
 | Model | Test Accuracy | Parameters | Key Configuration |
 |-------|:---:|:---:|---|
 | Logistic Regression (baseline) | 13.72% | — | StandardScaler + C=0.05, max_iter=400 |
-| DeepConvNet | 20.64% | 278,246 | 250 Hz, no augmentations, kernel=15 |
+| DeepConvNet | 19.49% | 278,246 | 250 Hz, no augmentations, kernel=15 |
 | EEGNet (k=15, no SWA) | 19.49% | 157,024 | 250 Hz, mixup+noise, kernel=15 |
-| EEGNet (k=15, with SWA) | 21.41% | 157,024 | 250 Hz, mixup+noise, kernel=15, SWA |
-| EEGNet (k=25, no SWA) | 21.15% | 157,344 | 250 Hz, mixup+noise, kernel=25 |
+| EEGNet (k=15, with SWA) | 17.44% | 157,024 | 250 Hz, mixup+noise, kernel=15, SWA |
+| EEGNet (k=25, no SWA) | 16.67% | 157,344 | 250 Hz, mixup+noise, kernel=25 |
 | EEGInception | 16.67% | 243,655 | 250 Hz, mixup, kernels=(7,5,3) |
 
 ### Ensemble Performance
 
 | Configuration | Test Accuracy |
 |-------|:---:|
-| DCN + EEGNet (k=15) — 2-model baseline | 25.38% |
-| **DCN + EEGNet (k=15) + EEGNet (k=25) — 3-model** | **26.03%** |
+| DCN + EEGNet (k=15) — 2-model baseline | 21.79% |
+| **DCN + EEGNet (k=15) + EEGNet (k=25) — 3-model** | **22.18%** |
 
-The optimal 3-model configuration achieves **26.03%** — a +12.31% improvement over the logistic regression baseline and +4.74% over the best single model. Test-time BN adaptation is applied to all three models before inference. The EEGNet (k=25) variant adds +0.65% over the 2-model baseline by providing complementary 100ms temporal processing alongside the 60ms kernel of the primary EEGNet.
+The historical scores in this section are retained as prior measurements only. New development comparisons use the frozen split manifest and inductive evaluation; they do not feed test results or test-cohort statistics back into training or selection.
 
 ### Temporal Kernel Ablation
 
@@ -314,10 +314,11 @@ python src/train.py --model eeg_inception    # EEGInception
 
 **Train the ensemble (DeepConvNet + two EEGNet variants):**
 ```bash
-python src/train.py --model ensemble       # deterministic (default)
-python src/train.py --model ensemble --fast # ~47% faster GPU, minor accuracy trade-off
-python src/train.py --model ensemble --cpu  # CPU with parallel training
-python src/train.py --model ensemble --seed 42  # specify random seed
+python src/train.py --model ensemble --development-only  # development-only (default)
+python src/train.py --model ensemble --fast --development-only
+python src/train.py --model ensemble --cpu --development-only
+python src/train.py --model ensemble --seed 42 --development-only
+python src/train.py --model ensemble --evaluate-test  # explicit final-test mode
 ```
 
 Supported Apple Silicon Macs automatically use the Metal Performance Shaders
@@ -342,8 +343,12 @@ python src/train.py --model ensemble --fast --quick 10
 | `--fast` | Enable `cudnn.benchmark` (~47% faster GPU epochs; minor accuracy trade-off) | `False` |
 | `--quick N` | Limit to N epochs for timing estimates | `0` (full training) |
 | `--seed` | Random seed for reproducibility | `42` |
+| `--development-only` | Train/evaluate only on fitting and validation partitions | Default |
+| `--evaluate-test` | Evaluate the fixed test partition after the recipe is locked | Explicit opt-in |
+| `--split-manifest` | Frozen split manifest path | `data/split_manifest.json` |
+| `--write-split-manifest` | Create the manifest and exit without training | `False` |
 
-Note: Stochastic Weight Averaging (SWA) is baked into the ensemble pipeline by default for the primary EEGNet (k=15) — no flag required. The k=25 variant uses best-checkpoint weights for error diversity. Test-time BN adaptation is applied automatically during ensemble evaluation.
+Note: Stochastic Weight Averaging (SWA) remains baked into the ensemble pipeline by default for the primary EEGNet (k=15) — no flag required. The k=25 variant uses best-checkpoint weights for error diversity. Both development and final-test evaluation are inductive; test-time BatchNorm adaptation is disabled.
 
 ---
 
@@ -468,7 +473,7 @@ DeepConvNet and EEGNet represent different points on the bias-variance trade-off
 - EEGNet (k=15, 60 ms) has lower capacity (157K params) and uses aggressive regularisation (mixup, noise, max-norm, SWA) — it learns robust but potentially simpler features.
 - EEGNet (k=25, 100 ms) uses the same regularisation as the primary EEGNet but with a longer temporal kernel — it captures slower ERP components (P3 at ~300 ms) that the 60 ms window may truncate.
 
-Their complementary errors cancel out in the ensemble, producing predictions more accurate than any single model alone. SWA (Stochastic Weight Averaging) is applied only to the primary EEGNet (k=15) in the ensemble — the k=25 variant uses best-checkpoint weights to preserve error diversity. Test-time BN adaptation corrects for the mild distribution shift introduced by the chronological train/test split, and is applied asymmetrically (3-model only) because logit averaging across three models smooths individual BN instability.
+Their complementary errors cancel out in the ensemble, producing predictions more accurate than any single model alone. SWA (Stochastic Weight Averaging) is applied only to the primary EEGNet (k=15) in the ensemble — the k=25 variant uses best-checkpoint weights to preserve inter-model error diversity. Current evaluation is inductive and does not update BatchNorm from the evaluation cohort.
 
 ### Why No Contrastive Pre-training?
 
