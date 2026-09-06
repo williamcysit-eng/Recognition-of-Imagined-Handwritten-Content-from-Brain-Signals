@@ -1,0 +1,16 @@
+modelRoles:
+  architect: openai-codex/gpt-5.6-sol:xhigh
+  worker: openai-codex/gpt-5.6-luna:max
+  auditor: openai-codex/gpt-5.6-luna:max
+  validator: openai-codex/gpt-5.6-sol:medium
+  committer: openai-codex/gpt-5.6-luna:xhigh
+  advisor: openai-codex/gpt-5.6-sol:medium
+
+advisor:
+  enabled: true
+  syncBacklog: 1
+  immuneTurns: 1
+
+task:
+  maxRecursionDepth: 2
+  enableLsp: true

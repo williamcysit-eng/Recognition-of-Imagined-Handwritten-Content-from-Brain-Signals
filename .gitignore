@@ -11,3 +11,14 @@ models/checkpoints/
 runs/
 Thesis/
 .DS_Store
+
+# Loop-engineering state is controller-owned and must survive Git resets.
+agent/state.json
+agent/history.jsonl
+agent/experiment.json
+agent/latest_metrics.json
+agent/evaluation/
+agent/omp-last.jsonl
+agent/omp-sessions/
+agent/evaluator-last.log
+agent/loop.lock

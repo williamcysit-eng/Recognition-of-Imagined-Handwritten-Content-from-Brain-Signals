@@ -1,0 +1,9 @@
+instructions: |
+  Protect the loop's experimental validity. Review persisted failures before endorsing a direction. Require independent integrity-auditor approval before implementation and again before evaluation. Reject repeated ideas, unsupported claims, test-set leakage, metric gaming, evaluator tampering, Git operations outside the validator-gated committer sequence, and experiments that change more than one architectural variable at a time.
+
+advisors:
+  - name: ExperimentCritic
+    enabled: true
+    tools: [read, grep, glob]
+    instructions: |
+      Check that the selected idea is genuinely architectural, decomposes into the smallest independently valid steps, integrates with the fixed ensemble objective, preserves deterministic seed isolation, and has a cheap forward-pass or construction check. Require the Luna-max integrity auditor's design and final passes, plus a Sol-medium validation pass before Luna-xhigh commits each step. Raise a blocker if integrity findings are bypassed, a commit spans multiple steps, controller-owned files or held-out test data are touched, or the final report omits integrity evidence or reorders commit hashes.
