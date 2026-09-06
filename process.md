@@ -433,3 +433,87 @@ Selected candidate: SWA
 | Logistic regression | 13.72% |
 
 Against the V5.6.2 baseline of **22.56%**, the new three-model result is **+1.16 percentage points** (approximately 185 versus 176 correct predictions out of 780). This is no regression. The comparison includes both SWA-policy and RNG-stream changes, so the result does not isolate either factor as a causal accuracy gain.
+
+### Part 11: Suggested Improvements 4.x–5.x and Final Integrity Review
+
+This follow-up tested the remaining recommendations from `suggested_improvements.md` using the frozen split and the development-only path. The experiments below were selected and compared without querying the held-out test partition. Exploratory artifacts for rejected changes were removed; only accepted source changes remain in the repository.
+
+#### 11.1 Experiment ledger
+
+| ID | Change tested | Development result | Decision |
+|---|---|---|---|
+| 4.1 | Compact spectral-power branch | Regressed the fixed development reference | Rejected; exploratory implementation and artifacts removed |
+| 4.2 | Residual dilated temporal-convolution network | Regressed the fixed development reference | Rejected; exploratory implementation and artifacts removed |
+| 4.3 | Position-preserving compressed DCN head | Reference development ensemble improved from **20.26% to 20.90%** | **Accepted**; committed as `33f4fa9` |
+| 4.4 | Recorded-time early/late window ablations | Early window improved standalone development performance; late window regressed | Retained only as explicit ablation support; full window remains the default |
+| 4.5 | Small convolutional transformer | Regressed the fixed development reference | Rejected; exploratory implementation and artifacts removed |
+| 5.1 | Prespecified three-seed compressed-head averaging, seeds 41/42/43 | Individual development accuracies: **15.64%, 16.67%, 18.85%**; fixed logit-average ensemble: **20.38%**, below the accepted **20.90%** reference | Rejected; no seed was cherry-picked; artifacts removed |
+| 5.2 | Stable-ID ensemble contribution and logit/probability averaging | Fixed logit ensemble: **20.90%**, NLL **2.6923**; probability mixture: **20.00%**, NLL **2.7066** | Keep fixed logit averaging; no source change required |
+| 5.3 | Fitting-only per-channel normalization | Three-model normalized recipe: **20.13%**, below the accepted **20.90%** reference | Rejected; normalization artifacts removed |
+| 5.4 | Additional independent data | No independent session, participant, or compatible external EEG data was available | No valid experiment; no code or result claimed |
+
+#### 11.2 Accepted implementation changes
+
+The retained architectural change is a position-preserving classifier-head reduction:
+
+```text
+unchanged DCN convolutional stem
+  -> shared 1x1 projection, 80 feature channels -> 32
+  -> flatten all 100 output time positions
+  -> single 26-class linear head
+```
+
+The convolutional stem and temporal positions are preserved while the large classifier head is reduced. The implementation is `models/position_preserving_dcn.py`; `src/train.py` exposes it as `compressed_deep_conv_net`. The accepted change is recorded in commit `33f4fa9`.
+
+The window ablation support is implemented in `src/train.py`:
+
+| Window | Recorded-time range |
+|---|---:|
+| `full` | Entire epoch |
+| `early` | 0 to <600 ms |
+| `late` | 600 to 2800 ms |
+
+Windows are selected from the supplied `time_points` vector after splitting, not from guessed sample indices. Commit `0309b83` added the support; `e9487f9` corrected the temporal-axis propagation; `922e3f5` documented the accepted result. `full` remains the default, so the ablation does not silently change the baseline recipe.
+
+No spectral branch, residual TCN, transformer, test-specific normalization, or multi-seed replacement was retained.
+
+#### 11.3 Ensemble-analysis result
+
+The ensemble comparison used stable development trial IDs and compared the actual combined predictor rather than standalone scores. Logit averaging outperformed probability averaging on both development accuracy and NLL for the accepted reference:
+
+| Combination | Development accuracy | Development NLL |
+|---|---:|---:|
+| Fixed logit average | 20.90% | 2.6923 |
+| Probability mixture | 20.00% | 2.7066 |
+
+The comparison did not fit weights on the same predictions used for evaluation, and it did not use test labels. The result is an analysis of the fixed recipe, not a new test-set optimization.
+
+#### 11.4 Independent-data limitation
+
+The raw MAT archive contains only `data`, `label`, `channel_labels`, and `time_points`. The provider documentation identifies one participant but does not provide session, run, block, or acquisition identifiers. Consequently, improvement 5.4 could not be executed honestly. Synthetic duplication, reshuffling, or a new split of the same trials would not constitute independent evidence.
+
+The frozen split remains a class-wise stored-index 80/10/10 approximation:
+
+```text
+6,240 fitting trials
+  780 validation trials
+  780 held-out test trials
+```
+
+Results must therefore be described as within-dataset, within-participant held-out performance, not verified cross-session or cross-participant generalization.
+
+#### 11.5 Integrity review after the experiments
+
+The current `src/train.py` path was reviewed after the 4.x and 5.x experiments:
+
+1. Development-only mode passes only fitting and validation arrays to training and returns no test arrays for evaluation.
+2. The explicit test path is selected only after training; test labels are not accepted by `train_deep_learning_model`.
+3. Best checkpoints are selected by validation loss.
+4. Best-versus-SWA selection and ensemble candidate selection use validation data only.
+5. SWA BatchNorm recalibration uses clean fitting data only.
+6. Current checkpoint metadata records `validation_only` or `ensemble_validation_only` selection scopes.
+7. No active test-time BatchNorm update, test-cohort alignment, test-label optimization, or test-specific weight search remains in `HEAD`.
+
+Historical code before the protocol guard included test-time BatchNorm adaptation, and the removed aligned-DCN workflow estimated a covariance transform separately from test inputs. Those paths are not part of the accepted compressed-head run and must not be used to describe a strict inductive result. The old results remain historical measurements only.
+
+The 4.x and 5.x development results support the compressed DCN head as the accepted change, but they do not establish a general performance ceiling. Future changes must continue to use the development-only path, lock the complete recipe before final evaluation, and report the fixed test result only once.
