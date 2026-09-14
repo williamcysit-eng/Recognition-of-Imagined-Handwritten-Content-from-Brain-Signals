@@ -528,8 +528,7 @@ The 4.x and 5.x development results support the compressed DCN head as the accep
 
 ## Part 12: Validation-only accuracy optimization (2026-09-14)
 
-The first accuracy experiment changed only the ensemble's DCN component. Every
-run used the fixed development split and
+The accuracy experiments used the fixed development split and
 `--model ensemble --development-only`; the test partition was not materialized,
 and no test labels or test-derived statistics were accessed.
 
@@ -537,6 +536,7 @@ and no test labels or test-derived statistics were accessed.
 |---|---|---:|---|
 | `acc1-compressed-dcn-20260914` | Position-preserving DCN with a configuration-derived compressed-model seed | 19.74% | Rejected |
 | `acc1-fix-compressed-seed-20260914` | Same head with the baseline DCN seed stream | **20.90%** | Accepted |
+| `acc2-projection48-20260914` | Position-preserving DCN projection width 32 → 48 | 20.00% | Rejected; source change rolled back |
 
 The fixed 5:5:1 baseline was 20.26%. The accepted implementation is recorded
 in commit `3ef773f`; the ensemble now uses the position-preserving DCN head by
@@ -548,6 +548,10 @@ the EEGNet k=15 and k=25 checkpoints came from `full-ensemble-20260906`.
 A single locked inference-only evaluation of the frozen test partition then
 measured **25.64%** for `ensemble_3_k25`. This test result was not used for any
 architecture, weight, ensemble-weight, or candidate-selection decision.
+
+The projection-width candidate completed its full development-only run in
+1,802.53 seconds and was rejected because it reduced the ensemble result by
+0.90 percentage points. Its generated checkpoints were removed.
 
 ---
 
