@@ -215,9 +215,11 @@ All tested on seed 42 (deterministic, seed 42). Baseline 2-model ensemble: **25.
 
 DCN at 20.64% is at a delicate local optimum. Every architectural change, augmentation, or hyperparameter tweak regresses it. DCN's seed sensitivity (17.69% → 20.64% → 20.26%) is the primary bottleneck. EEGNet+SWA is robust (21.41%–21.79%).
 
-#### Untried Optimizer Approaches
+#### Optimizer approaches
 
-SGD+Nesterov, CosineAnnealingWarmRestarts, OneCycleLR all tested and failed. Gradient clipping, EMA, and separate WD also failed. **Not yet tested: SAM (Sharpness-Aware Minimization), RAdam, Lookahead, Lion.**
+SGD+Nesterov, CosineAnnealingWarmRestarts, OneCycleLR, gradient clipping, EMA,
+separate weight decay, SAM, and RAdam were tested and failed to improve the
+accepted recipe. **Still untested: Lookahead and Lion.**
 
 #### Additional Optimizer & Architecture Experiments (Session 2026-06-19, continued)
 
@@ -324,7 +326,11 @@ output = 0.455 * DCN_logits + 0.455 * EEGNet_k15_logits + 0.091 * EEGNet_k25_log
 
 #### Untried Approaches (for future work)
 
-Frequency-domain models (STFT/FFT features), per-frequency-band decomposition, temporal cropping augmentation, multi-checkpoint EEGNet bagging, validation-optimized ensemble weights (grid search), lightweight transformer for EEG.
+Frequency-domain models (STFT/FFT features), per-frequency-band decomposition,
+temporal cropping augmentation, multi-checkpoint EEGNet bagging, and
+validation-optimized ensemble weights (grid search) remain untested. A small
+convolutional transformer was rejected in Part 11; other lightweight
+transformer variants remain untested.
 
 ---
 
