@@ -1092,6 +1092,7 @@ def evaluate_ensemble_bundle_on_split(
     w_dcn=5.0,
     w_eeg=5.0,
     w_k25=1.0,
+    dcn_result_name="deep_conv_net",
 ):
     """Evaluate all final ensemble components in one shared inference pass."""
     weights = np.asarray((w_dcn, w_eeg, w_k25), dtype=np.float64)
@@ -1105,7 +1106,7 @@ def evaluate_ensemble_bundle_on_split(
         model.eval()
 
     correct = {
-        "deep_conv_net": torch.zeros((), device=device),
+        dcn_result_name: torch.zeros((), device=device),
         "eegnet": torch.zeros((), device=device),
         "ensemble_dcn_eegnet": torch.zeros((), device=device),
         "eegnet_k25": torch.zeros((), device=device),
@@ -1122,7 +1123,7 @@ def evaluate_ensemble_bundle_on_split(
             eeg_logits = eeg_model(batch_x)
             k25_logits = eeg_k25_model(batch_x)
             logits = {
-                "deep_conv_net": dcn_logits,
+                dcn_result_name: dcn_logits,
                 "eegnet": eeg_logits,
                 "ensemble_dcn_eegnet": (dcn_logits + eeg_logits) / 2.0,
                 "eegnet_k25": k25_logits,
@@ -1406,9 +1407,10 @@ if __name__ == "__main__":
 
     if args.model in ("ensemble", "all"):
         print("\n" + "=" * 60)
-        print("  Training Ensemble: DeepConvNet + EEGNet")
+        print("  Training Ensemble: Position-Preserving DCN + EEGNet")
         print("=" * 60)
 
+        dcn_model_type = "compressed_deep_conv_net"
         dcn_seed = derive_model_seed(
             args.seed,
             "deep_conv_net",
@@ -1445,7 +1447,7 @@ if __name__ == "__main__":
             dcn_candidates,
             dcn_artifacts,
         ) = train_deep_learning_model(
-            model_type="deep_conv_net",
+            model_type=dcn_model_type,
             X_train=X_train,
             y_train=y_train,
             X_val=X_val,
@@ -1582,6 +1584,7 @@ if __name__ == "__main__":
             w_dcn=5,
             w_eeg=5,
             w_k25=1,
+            dcn_result_name=dcn_model_type,
         )
         results.update(bundle_results)
     if args.include_baseline:
