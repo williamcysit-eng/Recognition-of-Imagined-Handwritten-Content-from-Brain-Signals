@@ -219,17 +219,19 @@ def _evaluate_model_metrics(model, X_eval, y_eval, device, criterion):
     eval_dataset = EEGDataset(X_eval, y_eval)
     eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
     model.eval()
-    total_loss, correct, total = 0.0, 0, 0
-    with torch.no_grad():
+    total_loss = torch.zeros((), device=device)
+    correct = torch.zeros((), device=device)
+    total = 0
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = model(batch_x)
-            total_loss += criterion(outputs, batch_y).item() * batch_y.size(0)
-            correct += outputs.argmax(dim=1).eq(batch_y).sum().item()
+            total_loss += criterion(outputs, batch_y) * batch_y.size(0)
+            correct += outputs.argmax(dim=1).eq(batch_y).sum()
             total += batch_y.size(0)
     return {
-        "loss": total_loss / total,
-        "accuracy": (correct / total) * 100,
+        "loss": total_loss.item() / total,
+        "accuracy": (correct.item() / total) * 100,
     }
 
 
@@ -686,8 +688,8 @@ def train_deep_learning_model(
     for epoch in range(1, num_epochs + 1):
         t0 = time.time()
         model.train()
-        train_loss = 0.0
-        correct_train = 0
+        train_loss = torch.zeros((), device=device)
+        correct_train = torch.zeros((), device=device)
         total_train = 0
 
         for batch_x, batch_y in train_loader:
@@ -721,14 +723,14 @@ def train_deep_learning_model(
                 ) * criterion(outputs, batch_y[index])
                 _, predicted = outputs.max(1)
                 correct_train += (
-                    lam * predicted.eq(batch_y).sum().item()
-                    + (1 - lam) * predicted.eq(batch_y[index]).sum().item()
+                    lam * predicted.eq(batch_y).sum()
+                    + (1 - lam) * predicted.eq(batch_y[index]).sum()
                 )
             else:
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
                 _, predicted = outputs.max(1)
-                correct_train += predicted.eq(batch_y).sum().item()
+                correct_train += predicted.eq(batch_y).sum()
 
             loss.backward()
             optimizer.step()
@@ -736,28 +738,28 @@ def train_deep_learning_model(
             if model_type == "eegnet":
                 apply_max_norm_constraints(model)
 
-            train_loss += loss.item() * batch_x.size(0)
+            train_loss += loss.detach() * batch_x.size(0)
             total_train += batch_y.size(0)
 
-        epoch_train_loss = train_loss / total_train
-        epoch_train_acc = (correct_train / total_train) * 100
+        epoch_train_loss = train_loss.item() / total_train
+        epoch_train_acc = (correct_train.item() / total_train) * 100
 
         model.eval()
-        val_loss = 0.0
-        correct_val = 0
+        val_loss = torch.zeros((), device=device)
+        correct_val = torch.zeros((), device=device)
         total_val = 0
-        with torch.no_grad():
+        with torch.inference_mode():
             for batch_x, batch_y in val_loader:
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
-                val_loss += loss.item() * batch_x.size(0)
+                val_loss += loss * batch_x.size(0)
                 _, predicted = outputs.max(1)
-                correct_val += predicted.eq(batch_y).sum().item()
+                correct_val += predicted.eq(batch_y).sum()
                 total_val += batch_y.size(0)
 
-        epoch_val_loss = val_loss / total_val
-        epoch_val_acc = (correct_val / total_val) * 100
+        epoch_val_loss = val_loss.item() / total_val
+        epoch_val_acc = (correct_val.item() / total_val) * 100
         epoch_time = time.time() - t0
         history["train_loss"].append(epoch_train_loss)
         history["train_acc"].append(epoch_train_acc)
@@ -923,7 +925,7 @@ def evaluate_model_on_split(
     eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
     model.eval()
     correct, total = 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = model(batch_x)
@@ -951,7 +953,7 @@ def evaluate_ensemble_on_split(
     model_a.eval()
     model_b.eval()
     correct, total = 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = (model_a(batch_x) + model_b(batch_x)) / 2.0
@@ -979,7 +981,7 @@ def evaluate_gated_ensemble_on_split(
     model_a.eval()
     model_b.eval()
     correct, total, agree_count = 0, 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             out_a = model_a(batch_x)
@@ -1026,7 +1028,7 @@ def evaluate_ensemble_3_fixed_on_split(
     eeg_model.eval()
     ei_model.eval()
     correct, total = 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = (
