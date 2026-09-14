@@ -1180,6 +1180,11 @@ if __name__ == "__main__":
         default=None,
         help="Artifact run identifier (default: timestamped run directory)",
     )
+    parser.add_argument(
+        "--include-baseline",
+        action="store_true",
+        help="Also fit and report the logistic-regression baseline",
+    )
     args = parser.parse_args()
 
     if args.downsample < 1:
@@ -1516,14 +1521,14 @@ if __name__ == "__main__":
             w_eeg=5,
             w_ei=1,
         )
-
-    results["logistic_regression"] = run_logistic_regression_baseline(
-        X_train,
-        y_train,
-        X_eval,
-        y_eval,
-        split_name=evaluation_name,
-    )
+    if args.include_baseline:
+        results["logistic_regression"] = run_logistic_regression_baseline(
+            X_train,
+            y_train,
+            X_eval,
+            y_eval,
+            split_name=evaluation_name,
+        )
 
     print(f"\nFINAL {evaluation_name.upper()} COMPARISON RESULTS")
     for model_name, accuracy in results.items():
