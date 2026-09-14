@@ -579,6 +579,7 @@ def train_deep_learning_model(
     run_id=None,
     artifact_root=None,
     return_candidates=False,
+    evaluate_candidates=True,
 ):
     """
     Train one model, validate best and SWA candidates, and save exact artifacts.
@@ -811,11 +812,11 @@ def train_deep_learning_model(
         torch.load(artifacts["best"], map_location=device)
     )
     candidates = {"best": best_model}
-    candidate_validation = {
-        "best": _evaluate_model_metrics(
+    candidate_validation = {}
+    if evaluate_candidates:
+        candidate_validation["best"] = _evaluate_model_metrics(
             best_model, X_val, y_val, device, criterion
         )
-    }
     recalibration_batches = 0
 
     if swa_model is not None:
@@ -830,20 +831,21 @@ def train_deep_learning_model(
             swa_candidate.eval()
             _save_checkpoint(swa_candidate, artifacts["swa"])
             candidates["swa"] = swa_candidate
-            candidate_validation["swa"] = _evaluate_model_metrics(
-                swa_candidate,
-                X_val,
-                y_val,
-                device,
-                criterion,
-            )
+            if evaluate_candidates:
+                candidate_validation["swa"] = _evaluate_model_metrics(
+                    swa_candidate,
+                    X_val,
+                    y_val,
+                    device,
+                    criterion,
+                )
         else:
             averaged_epochs = 0
     else:
         averaged_epochs = 0
 
     selected_name = "best"
-    if "swa" in candidate_validation:
+    if evaluate_candidates and "swa" in candidate_validation:
         best_metrics = candidate_validation["best"]
         swa_metrics = candidate_validation["swa"]
         if (
@@ -888,15 +890,18 @@ def train_deep_learning_model(
             else None
         ),
         "selected_checkpoint": os.path.basename(artifacts["selected"]),
-        "selection_scope": "validation_only",
+        "selection_scope": (
+            "validation_only" if evaluate_candidates else "deferred_selection"
+        ),
     }
     with open(artifacts["metadata"], "w", encoding="utf-8") as metadata_file:
         json.dump(metadata, metadata_file, indent=2)
 
-    print(
-        f"Best-checkpoint validation accuracy: "
-        f"{candidate_validation['best']['accuracy']:.2f}%"
-    )
+    if "best" in candidate_validation:
+        print(
+            f"Best-checkpoint validation accuracy: "
+            f"{candidate_validation['best']['accuracy']:.2f}%"
+        )
     if "swa" in candidate_validation:
         print(
             "SWA + clean-training BN recalibration validation accuracy: "
@@ -1433,6 +1438,7 @@ if __name__ == "__main__":
             run_id=run_id,
             artifact_root=DEFAULT_CHECKPOINT_ROOT,
             return_candidates=True,
+            evaluate_candidates=False,
         )
         (
             eeg_model,
@@ -1464,6 +1470,7 @@ if __name__ == "__main__":
             run_id=run_id,
             artifact_root=DEFAULT_CHECKPOINT_ROOT,
             return_candidates=True,
+            evaluate_candidates=False,
         )
 
 
@@ -1534,6 +1541,7 @@ if __name__ == "__main__":
             run_id=run_id,
             artifact_root=DEFAULT_CHECKPOINT_ROOT,
             return_candidates=True,
+            evaluate_candidates=False,
         )
         bundle_results = evaluate_ensemble_bundle_on_split(
             dcn_model,
