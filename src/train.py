@@ -224,7 +224,10 @@ def _evaluate_model_metrics(model, X_eval, y_eval, device, criterion):
     total = 0
     with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x, batch_y = (
+                batch_x.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
             outputs = model(batch_x)
             total_loss += criterion(outputs, batch_y) * batch_y.size(0)
             correct += outputs.argmax(dim=1).eq(batch_y).sum()
@@ -267,7 +270,7 @@ def _recalibrate_batchnorm(model, X_train, device, batch_size=128):
         )
         with torch.no_grad():
             for (batch_x,) in train_loader:
-                model(batch_x.to(device))
+                model(batch_x.to(device, non_blocking=True))
     finally:
         for module, training in training_states.items():
             module.train(training)
@@ -647,7 +650,11 @@ def train_deep_learning_model(
         generator=loader_generator,
         **dl_kwargs,
     )
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=max(batch_size, 128),
+        shuffle=False,
+    )
 
     criterion = nn.CrossEntropyLoss(
         label_smoothing=(
@@ -694,7 +701,10 @@ def train_deep_learning_model(
         total_train = 0
 
         for batch_x, batch_y in train_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x, batch_y = (
+                batch_x.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
             if is_cpu:
                 batch_x = batch_x.to(memory_format=torch.channels_last)
 
@@ -722,7 +732,7 @@ def train_deep_learning_model(
                 loss = lam * criterion(outputs, batch_y) + (
                     1 - lam
                 ) * criterion(outputs, batch_y[index])
-                _, predicted = outputs.max(1)
+                predicted = outputs.detach().argmax(dim=1)
                 correct_train += (
                     lam * predicted.eq(batch_y).sum()
                     + (1 - lam) * predicted.eq(batch_y[index]).sum()
@@ -730,7 +740,7 @@ def train_deep_learning_model(
             else:
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
-                _, predicted = outputs.max(1)
+                predicted = outputs.detach().argmax(dim=1)
                 correct_train += predicted.eq(batch_y).sum()
 
             loss.backward()
@@ -751,11 +761,14 @@ def train_deep_learning_model(
         total_val = 0
         with torch.inference_mode():
             for batch_x, batch_y in val_loader:
-                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+                batch_x, batch_y = (
+                    batch_x.to(device, non_blocking=True),
+                    batch_y.to(device, non_blocking=True),
+                )
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
                 val_loss += loss * batch_x.size(0)
-                _, predicted = outputs.max(1)
+                predicted = outputs.argmax(dim=1)
                 correct_val += predicted.eq(batch_y).sum()
                 total_val += batch_y.size(0)
 
@@ -932,9 +945,12 @@ def evaluate_model_on_split(
     correct, total = 0, 0
     with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x, batch_y = (
+                batch_x.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
             outputs = model(batch_x)
-            _, predicted = outputs.max(1)
+            predicted = outputs.argmax(dim=1)
             correct += predicted.eq(batch_y).sum().item()
             total += batch_y.size(0)
     accuracy = (correct / total) * 100
@@ -960,9 +976,12 @@ def evaluate_ensemble_on_split(
     correct, total = 0, 0
     with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x, batch_y = (
+                batch_x.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
             outputs = (model_a(batch_x) + model_b(batch_x)) / 2.0
-            _, predicted = outputs.max(1)
+            predicted = outputs.argmax(dim=1)
             correct += predicted.eq(batch_y).sum().item()
             total += batch_y.size(0)
     accuracy = (correct / total) * 100
@@ -988,7 +1007,10 @@ def evaluate_gated_ensemble_on_split(
     correct, total, agree_count = 0, 0, 0
     with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x, batch_y = (
+                batch_x.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
             out_a = model_a(batch_x)
             out_b = model_b(batch_x)
             probs_a = out_a.softmax(dim=1)
@@ -1035,13 +1057,16 @@ def evaluate_ensemble_3_fixed_on_split(
     correct, total = 0, 0
     with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x, batch_y = (
+                batch_x.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
             outputs = (
                 weights[0] * dcn_model(batch_x)
                 + weights[1] * eeg_model(batch_x)
                 + weights[2] * ei_model(batch_x)
             )
-            _, predicted = outputs.max(1)
+            predicted = outputs.argmax(dim=1)
             correct += predicted.eq(batch_y).sum().item()
             total += batch_y.size(0)
     accuracy = (correct / total) * 100
@@ -1089,7 +1114,10 @@ def evaluate_ensemble_bundle_on_split(
     total = 0
     with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x, batch_y = (
+                batch_x.to(device, non_blocking=True),
+                batch_y.to(device, non_blocking=True),
+            )
             dcn_logits = dcn_model(batch_x)
             eeg_logits = eeg_model(batch_x)
             k25_logits = eeg_k25_model(batch_x)
