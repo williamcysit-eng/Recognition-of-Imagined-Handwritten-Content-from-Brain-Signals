@@ -726,7 +726,7 @@ def train_deep_learning_model(
                 loss = lam * criterion(outputs, batch_y) + (
                     1 - lam
                 ) * criterion(outputs, batch_y[index])
-                _, predicted = outputs.max(1)
+                predicted = outputs.detach().argmax(dim=1)
                 correct_train += (
                     lam * predicted.eq(batch_y).sum()
                     + (1 - lam) * predicted.eq(batch_y[index]).sum()
@@ -734,7 +734,7 @@ def train_deep_learning_model(
             else:
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
-                _, predicted = outputs.max(1)
+                predicted = outputs.detach().argmax(dim=1)
                 correct_train += predicted.eq(batch_y).sum()
 
             loss.backward()
@@ -759,7 +759,7 @@ def train_deep_learning_model(
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
                 val_loss += loss * batch_x.size(0)
-                _, predicted = outputs.max(1)
+                predicted = outputs.argmax(dim=1)
                 correct_val += predicted.eq(batch_y).sum()
                 total_val += batch_y.size(0)
 
@@ -938,7 +938,7 @@ def evaluate_model_on_split(
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = model(batch_x)
-            _, predicted = outputs.max(1)
+            predicted = outputs.argmax(dim=1)
             correct += predicted.eq(batch_y).sum().item()
             total += batch_y.size(0)
     accuracy = (correct / total) * 100
@@ -966,7 +966,7 @@ def evaluate_ensemble_on_split(
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = (model_a(batch_x) + model_b(batch_x)) / 2.0
-            _, predicted = outputs.max(1)
+            predicted = outputs.argmax(dim=1)
             correct += predicted.eq(batch_y).sum().item()
             total += batch_y.size(0)
     accuracy = (correct / total) * 100
@@ -1045,7 +1045,7 @@ def evaluate_ensemble_3_fixed_on_split(
                 + weights[1] * eeg_model(batch_x)
                 + weights[2] * ei_model(batch_x)
             )
-            _, predicted = outputs.max(1)
+            predicted = outputs.argmax(dim=1)
             correct += predicted.eq(batch_y).sum().item()
             total += batch_y.size(0)
     accuracy = (correct / total) * 100
