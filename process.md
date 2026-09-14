@@ -215,9 +215,11 @@ All tested on seed 42 (deterministic, seed 42). Baseline 2-model ensemble: **25.
 
 DCN at 20.64% is at a delicate local optimum. Every architectural change, augmentation, or hyperparameter tweak regresses it. DCN's seed sensitivity (17.69% → 20.64% → 20.26%) is the primary bottleneck. EEGNet+SWA is robust (21.41%–21.79%).
 
-#### Untried Optimizer Approaches
+#### Optimizer approaches
 
-SGD+Nesterov, CosineAnnealingWarmRestarts, OneCycleLR all tested and failed. Gradient clipping, EMA, and separate WD also failed. **Not yet tested: SAM (Sharpness-Aware Minimization), RAdam, Lookahead, Lion.**
+SGD+Nesterov, CosineAnnealingWarmRestarts, OneCycleLR, gradient clipping, EMA,
+separate weight decay, SAM, and RAdam were tested and failed to improve the
+accepted recipe. **Still untested: Lookahead and Lion.**
 
 #### Additional Optimizer & Architecture Experiments (Session 2026-06-19, continued)
 
@@ -324,7 +326,11 @@ output = 0.455 * DCN_logits + 0.455 * EEGNet_k15_logits + 0.091 * EEGNet_k25_log
 
 #### Untried Approaches (for future work)
 
-Frequency-domain models (STFT/FFT features), per-frequency-band decomposition, temporal cropping augmentation, multi-checkpoint EEGNet bagging, validation-optimized ensemble weights (grid search), lightweight transformer for EEG.
+Frequency-domain models (STFT/FFT features), per-frequency-band decomposition,
+temporal cropping augmentation, multi-checkpoint EEGNet bagging, and
+validation-optimized ensemble weights (grid search) remain untested. A small
+convolutional transformer was rejected in Part 11; other lightweight
+transformer variants remain untested.
 
 ---
 
@@ -542,3 +548,26 @@ the EEGNet k=15 and k=25 checkpoints came from `full-ensemble-20260906`.
 A single locked inference-only evaluation of the frozen test partition then
 measured **25.64%** for `ensemble_3_k25`. This test result was not used for any
 architecture, weight, ensemble-weight, or candidate-selection decision.
+
+---
+
+## Part 13: Efficiency-only implementation changes (2026-09-14)
+
+The following commits were tried to reduce runtime, memory traffic, or
+unnecessary work. They are not accuracy experiments: they do not change the
+split, model recipe, weights, or validation candidate-selection policy.
+
+| Commit | Change | Scope |
+|---|---|---|
+| `43fcc6d` | Reduce device synchronization in training metrics | Training-loop runtime |
+| `b17845e` | Avoid redundant EEG dataset tensor copies | Memory traffic |
+| `831fc4d` | Make logistic regression baseline opt-in | Avoid unused work |
+| `bcdee5d` | Bundle final ensemble evaluation passes | Evaluation runtime |
+| `fca7140` | Avoid scanning EEGNet parameters for max-norm work | Training-loop runtime |
+| `b421ef1` | Defer redundant standalone ensemble candidate validation | Validation runtime |
+| `3779c76` | Use larger validation batches | Validation runtime |
+| `6042a3f` | Avoid computing unused metric maxima | Evaluation runtime |
+| `97555fc` | Use nonblocking device transfers | Device-transfer runtime |
+
+These changes were kept for execution efficiency and were not used to select
+the final accuracy recipe.
