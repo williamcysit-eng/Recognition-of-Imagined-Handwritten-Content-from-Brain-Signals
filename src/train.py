@@ -219,17 +219,19 @@ def _evaluate_model_metrics(model, X_eval, y_eval, device, criterion):
     eval_dataset = EEGDataset(X_eval, y_eval)
     eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
     model.eval()
-    total_loss, correct, total = 0.0, 0, 0
-    with torch.no_grad():
+    total_loss = torch.zeros((), device=device)
+    correct = torch.zeros((), device=device)
+    total = 0
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = model(batch_x)
-            total_loss += criterion(outputs, batch_y).item() * batch_y.size(0)
-            correct += outputs.argmax(dim=1).eq(batch_y).sum().item()
+            total_loss += criterion(outputs, batch_y) * batch_y.size(0)
+            correct += outputs.argmax(dim=1).eq(batch_y).sum()
             total += batch_y.size(0)
     return {
-        "loss": total_loss / total,
-        "accuracy": (correct / total) * 100,
+        "loss": total_loss.item() / total,
+        "accuracy": (correct.item() / total) * 100,
     }
 
 
@@ -577,6 +579,7 @@ def train_deep_learning_model(
     run_id=None,
     artifact_root=None,
     return_candidates=False,
+    evaluate_candidates=True,
 ):
     """
     Train one model, validate best and SWA candidates, and save exact artifacts.
@@ -686,8 +689,8 @@ def train_deep_learning_model(
     for epoch in range(1, num_epochs + 1):
         t0 = time.time()
         model.train()
-        train_loss = 0.0
-        correct_train = 0
+        train_loss = torch.zeros((), device=device)
+        correct_train = torch.zeros((), device=device)
         total_train = 0
 
         for batch_x, batch_y in train_loader:
@@ -721,14 +724,14 @@ def train_deep_learning_model(
                 ) * criterion(outputs, batch_y[index])
                 _, predicted = outputs.max(1)
                 correct_train += (
-                    lam * predicted.eq(batch_y).sum().item()
-                    + (1 - lam) * predicted.eq(batch_y[index]).sum().item()
+                    lam * predicted.eq(batch_y).sum()
+                    + (1 - lam) * predicted.eq(batch_y[index]).sum()
                 )
             else:
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
                 _, predicted = outputs.max(1)
-                correct_train += predicted.eq(batch_y).sum().item()
+                correct_train += predicted.eq(batch_y).sum()
 
             loss.backward()
             optimizer.step()
@@ -736,28 +739,28 @@ def train_deep_learning_model(
             if model_type == "eegnet":
                 apply_max_norm_constraints(model)
 
-            train_loss += loss.item() * batch_x.size(0)
+            train_loss += loss.detach() * batch_x.size(0)
             total_train += batch_y.size(0)
 
-        epoch_train_loss = train_loss / total_train
-        epoch_train_acc = (correct_train / total_train) * 100
+        epoch_train_loss = train_loss.item() / total_train
+        epoch_train_acc = (correct_train.item() / total_train) * 100
 
         model.eval()
-        val_loss = 0.0
-        correct_val = 0
+        val_loss = torch.zeros((), device=device)
+        correct_val = torch.zeros((), device=device)
         total_val = 0
-        with torch.no_grad():
+        with torch.inference_mode():
             for batch_x, batch_y in val_loader:
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
-                val_loss += loss.item() * batch_x.size(0)
+                val_loss += loss * batch_x.size(0)
                 _, predicted = outputs.max(1)
-                correct_val += predicted.eq(batch_y).sum().item()
+                correct_val += predicted.eq(batch_y).sum()
                 total_val += batch_y.size(0)
 
-        epoch_val_loss = val_loss / total_val
-        epoch_val_acc = (correct_val / total_val) * 100
+        epoch_val_loss = val_loss.item() / total_val
+        epoch_val_acc = (correct_val.item() / total_val) * 100
         epoch_time = time.time() - t0
         history["train_loss"].append(epoch_train_loss)
         history["train_acc"].append(epoch_train_acc)
@@ -809,11 +812,11 @@ def train_deep_learning_model(
         torch.load(artifacts["best"], map_location=device)
     )
     candidates = {"best": best_model}
-    candidate_validation = {
-        "best": _evaluate_model_metrics(
+    candidate_validation = {}
+    if evaluate_candidates:
+        candidate_validation["best"] = _evaluate_model_metrics(
             best_model, X_val, y_val, device, criterion
         )
-    }
     recalibration_batches = 0
 
     if swa_model is not None:
@@ -828,20 +831,21 @@ def train_deep_learning_model(
             swa_candidate.eval()
             _save_checkpoint(swa_candidate, artifacts["swa"])
             candidates["swa"] = swa_candidate
-            candidate_validation["swa"] = _evaluate_model_metrics(
-                swa_candidate,
-                X_val,
-                y_val,
-                device,
-                criterion,
-            )
+            if evaluate_candidates:
+                candidate_validation["swa"] = _evaluate_model_metrics(
+                    swa_candidate,
+                    X_val,
+                    y_val,
+                    device,
+                    criterion,
+                )
         else:
             averaged_epochs = 0
     else:
         averaged_epochs = 0
 
     selected_name = "best"
-    if "swa" in candidate_validation:
+    if evaluate_candidates and "swa" in candidate_validation:
         best_metrics = candidate_validation["best"]
         swa_metrics = candidate_validation["swa"]
         if (
@@ -886,15 +890,18 @@ def train_deep_learning_model(
             else None
         ),
         "selected_checkpoint": os.path.basename(artifacts["selected"]),
-        "selection_scope": "validation_only",
+        "selection_scope": (
+            "validation_only" if evaluate_candidates else "deferred_selection"
+        ),
     }
     with open(artifacts["metadata"], "w", encoding="utf-8") as metadata_file:
         json.dump(metadata, metadata_file, indent=2)
 
-    print(
-        f"Best-checkpoint validation accuracy: "
-        f"{candidate_validation['best']['accuracy']:.2f}%"
-    )
+    if "best" in candidate_validation:
+        print(
+            f"Best-checkpoint validation accuracy: "
+            f"{candidate_validation['best']['accuracy']:.2f}%"
+        )
     if "swa" in candidate_validation:
         print(
             "SWA + clean-training BN recalibration validation accuracy: "
@@ -923,7 +930,7 @@ def evaluate_model_on_split(
     eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
     model.eval()
     correct, total = 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = model(batch_x)
@@ -951,7 +958,7 @@ def evaluate_ensemble_on_split(
     model_a.eval()
     model_b.eval()
     correct, total = 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = (model_a(batch_x) + model_b(batch_x)) / 2.0
@@ -979,7 +986,7 @@ def evaluate_gated_ensemble_on_split(
     model_a.eval()
     model_b.eval()
     correct, total, agree_count = 0, 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             out_a = model_a(batch_x)
@@ -1026,7 +1033,7 @@ def evaluate_ensemble_3_fixed_on_split(
     eeg_model.eval()
     ei_model.eval()
     correct, total = 0, 0
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_x, batch_y in eval_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             outputs = (
@@ -1047,6 +1054,75 @@ def evaluate_ensemble_3_fixed_on_split(
     )
     print(f"  * Single-Trial {split_name.title()} Accuracy: {accuracy:.2f}%")
     return accuracy
+
+
+def evaluate_ensemble_bundle_on_split(
+    dcn_model,
+    eeg_model,
+    eeg_k25_model,
+    X_eval,
+    y_eval,
+    device,
+    split_name="development",
+    w_dcn=5.0,
+    w_eeg=5.0,
+    w_k25=1.0,
+):
+    """Evaluate all final ensemble components in one shared inference pass."""
+    weights = np.asarray((w_dcn, w_eeg, w_k25), dtype=np.float64)
+    if np.any(weights < 0) or not np.isfinite(weights).all() or weights.sum() <= 0:
+        raise ValueError("ensemble weights must be finite, non-negative, and non-zero")
+    weights /= weights.sum()
+
+    eval_dataset = EEGDataset(X_eval, y_eval)
+    eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
+    for model in (dcn_model, eeg_model, eeg_k25_model):
+        model.eval()
+
+    correct = {
+        "deep_conv_net": torch.zeros((), device=device),
+        "eegnet": torch.zeros((), device=device),
+        "ensemble_dcn_eegnet": torch.zeros((), device=device),
+        "eegnet_k25": torch.zeros((), device=device),
+        "ensemble_3_k25": torch.zeros((), device=device),
+    }
+    total = 0
+    with torch.inference_mode():
+        for batch_x, batch_y in eval_loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            dcn_logits = dcn_model(batch_x)
+            eeg_logits = eeg_model(batch_x)
+            k25_logits = eeg_k25_model(batch_x)
+            logits = {
+                "deep_conv_net": dcn_logits,
+                "eegnet": eeg_logits,
+                "ensemble_dcn_eegnet": (dcn_logits + eeg_logits) / 2.0,
+                "eegnet_k25": k25_logits,
+                "ensemble_3_k25": (
+                    weights[0] * dcn_logits
+                    + weights[1] * eeg_logits
+                    + weights[2] * k25_logits
+                ),
+            }
+            for name, output in logits.items():
+                correct[name] += output.argmax(dim=1).eq(batch_y).sum()
+            total += batch_y.size(0)
+
+    accuracies = {
+        name: (count.item() / total) * 100
+        for name, count in correct.items()
+    }
+    print(f"\n--- ENSEMBLE COMPONENTS {split_name.upper()} EVALUATION ---")
+    for name, accuracy in accuracies.items():
+        print(
+            f"  * {name.upper():<25} "
+            f"{split_name.title()} Accuracy: {accuracy:.2f}%"
+        )
+    print(
+        f"  * Fixed weights: DCN={weights[0]:.3f}, "
+        f"EEGNet={weights[1]:.3f}, EEGNet k25={weights[2]:.3f}"
+    )
+    return accuracies
 
 
 # -----------------------------------------------------------------------------
@@ -1177,6 +1253,11 @@ if __name__ == "__main__":
         "--run-id",
         default=None,
         help="Artifact run identifier (default: timestamped run directory)",
+    )
+    parser.add_argument(
+        "--include-baseline",
+        action="store_true",
+        help="Also fit and report the logistic-regression baseline",
     )
     args = parser.parse_args()
 
@@ -1357,6 +1438,7 @@ if __name__ == "__main__":
             run_id=run_id,
             artifact_root=DEFAULT_CHECKPOINT_ROOT,
             return_candidates=True,
+            evaluate_candidates=False,
         )
         (
             eeg_model,
@@ -1388,19 +1470,9 @@ if __name__ == "__main__":
             run_id=run_id,
             artifact_root=DEFAULT_CHECKPOINT_ROOT,
             return_candidates=True,
+            evaluate_candidates=False,
         )
 
-        print("\n--- EEGNET K=15 DEVELOPMENT CANDIDATE COMPARISON ---")
-        eeg_candidate_validation = {}
-        for candidate_name, candidate_model in eeg_candidates.items():
-            eeg_candidate_validation[candidate_name] = evaluate_model_on_split(
-                f"eegnet_k15_{candidate_name}",
-                candidate_model,
-                X_val,
-                y_val,
-                device,
-                split_name="development",
-            )
 
         print("\n--- DCN + EEGNET K=15 DEVELOPMENT CANDIDATE COMPARISON ---")
         ensemble_candidate_validation = {}
@@ -1438,30 +1510,6 @@ if __name__ == "__main__":
             f"{selected_eeg_name}"
         )
 
-        results["deep_conv_net"] = evaluate_model_on_split(
-            "deep_conv_net",
-            dcn_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
-        results["eegnet"] = evaluate_model_on_split(
-            "eegnet",
-            eeg_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
-        results["ensemble_dcn_eegnet"] = evaluate_ensemble_on_split(
-            dcn_model,
-            eeg_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
 
         (
             eeg_k25_model,
@@ -1493,16 +1541,9 @@ if __name__ == "__main__":
             run_id=run_id,
             artifact_root=DEFAULT_CHECKPOINT_ROOT,
             return_candidates=True,
+            evaluate_candidates=False,
         )
-        results["eegnet_k25"] = evaluate_model_on_split(
-            "eegnet_k25",
-            eeg_k25_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
-        results["ensemble_3_k25"] = evaluate_ensemble_3_fixed_on_split(
+        bundle_results = evaluate_ensemble_bundle_on_split(
             dcn_model,
             eeg_model,
             eeg_k25_model,
@@ -1512,16 +1553,17 @@ if __name__ == "__main__":
             split_name=evaluation_name,
             w_dcn=5,
             w_eeg=5,
-            w_ei=1,
+            w_k25=1,
         )
-
-    results["logistic_regression"] = run_logistic_regression_baseline(
-        X_train,
-        y_train,
-        X_eval,
-        y_eval,
-        split_name=evaluation_name,
-    )
+        results.update(bundle_results)
+    if args.include_baseline:
+        results["logistic_regression"] = run_logistic_regression_baseline(
+            X_train,
+            y_train,
+            X_eval,
+            y_eval,
+            split_name=evaluation_name,
+        )
 
     print(f"\nFINAL {evaluation_name.upper()} COMPARISON RESULTS")
     for model_name, accuracy in results.items():

@@ -112,7 +112,9 @@ if TORCH_AVAILABLE:
         """
         def __init__(self, data, labels, transform=None):
             # Input data is shape (N, 24, 801) -> reshape to (N, 1, 24, 801)
-            self.data = torch.tensor(data, dtype=torch.float32).unsqueeze(1)
+            self.data = torch.from_numpy(
+                np.ascontiguousarray(data, dtype=np.float32)
+            ).unsqueeze(1)
             # Labels should be class indices (0 to 25)
             self.labels = torch.tensor(labels, dtype=torch.long)
             self.transform = transform
