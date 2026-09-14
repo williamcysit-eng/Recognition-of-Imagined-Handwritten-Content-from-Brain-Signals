@@ -535,3 +535,10 @@ and no test labels or test-derived statistics were accessed.
 The fixed 5:5:1 baseline was 20.26%. The accepted implementation is recorded
 in commit `3ef773f`; the ensemble now uses the position-preserving DCN head by
 default while `--model deep_conv_net` retains the standalone full head.
+
+The saved selected checkpoints reproduced the accepted 20.90% development
+result before any test inference. The DCN checkpoint came from `exp43-head`;
+the EEGNet k=15 and k=25 checkpoints came from `full-ensemble-20260906`.
+A single locked inference-only evaluation of the frozen test partition then
+measured **25.64%** for `ensemble_3_k25`. This test result was not used for any
+architecture, weight, ensemble-weight, or candidate-selection decision.

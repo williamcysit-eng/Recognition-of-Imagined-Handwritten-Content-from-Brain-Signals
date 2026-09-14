@@ -314,6 +314,13 @@ development-only validation result is **20.90%**, compared with **20.26%** for
 the previous full-head DCN recipe. The fixed split and inductive evaluation
 protocol remain unchanged; this is not a held-out test result.
 
+### Locked final evaluation
+
+After the development recipe and checkpoint selection were locked, one
+inference-only evaluation of the frozen test partition scored **25.64%** for
+`ensemble_3_k25`. The test result was not used to change the architecture,
+weights, ensemble weights, or any selection decision.
+
 ### Temporal Kernel Ablation
 
 The EEGNet temporal kernel length strongly affects performance. Shorter kernels better capture the fine temporal dynamics of handwriting imagery:
