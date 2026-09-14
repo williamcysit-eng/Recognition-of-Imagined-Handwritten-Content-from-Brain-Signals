@@ -517,3 +517,28 @@ The current `src/train.py` path was reviewed after the 4.x and 5.x experiments:
 Historical code before the protocol guard included test-time BatchNorm adaptation, and the removed aligned-DCN workflow estimated a covariance transform separately from test inputs. Those paths are not part of the accepted compressed-head run and must not be used to describe a strict inductive result. The old results remain historical measurements only.
 
 The 4.x and 5.x development results support the compressed DCN head as the accepted change, but they do not establish a general performance ceiling. Future changes must continue to use the development-only path, lock the complete recipe before final evaluation, and report the fixed test result only once.
+
+---
+
+## Part 12: Validation-only accuracy optimization (2026-09-14)
+
+The first accuracy experiment changed only the ensemble's DCN component. Every
+run used the fixed development split and
+`--model ensemble --development-only`; the test partition was not materialized,
+and no test labels or test-derived statistics were accessed.
+
+| Experiment | Change | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc1-compressed-dcn-20260914` | Position-preserving DCN with a configuration-derived compressed-model seed | 19.74% | Rejected |
+| `acc1-fix-compressed-seed-20260914` | Same head with the baseline DCN seed stream | **20.90%** | Accepted |
+
+The fixed 5:5:1 baseline was 20.26%. The accepted implementation is recorded
+in commit `3ef773f`; the ensemble now uses the position-preserving DCN head by
+default while `--model deep_conv_net` retains the standalone full head.
+
+The saved selected checkpoints reproduced the accepted 20.90% development
+result before any test inference. The DCN checkpoint came from `exp43-head`;
+the EEGNet k=15 and k=25 checkpoints came from `full-ensemble-20260906`.
+A single locked inference-only evaluation of the frozen test partition then
+measured **25.64%** for `ensemble_3_k25`. This test result was not used for any
+architecture, weight, ensemble-weight, or candidate-selection decision.
