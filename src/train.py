@@ -1051,6 +1051,75 @@ def evaluate_ensemble_3_fixed_on_split(
     return accuracy
 
 
+def evaluate_ensemble_bundle_on_split(
+    dcn_model,
+    eeg_model,
+    eeg_k25_model,
+    X_eval,
+    y_eval,
+    device,
+    split_name="development",
+    w_dcn=5.0,
+    w_eeg=5.0,
+    w_k25=1.0,
+):
+    """Evaluate all final ensemble components in one shared inference pass."""
+    weights = np.asarray((w_dcn, w_eeg, w_k25), dtype=np.float64)
+    if np.any(weights < 0) or not np.isfinite(weights).all() or weights.sum() <= 0:
+        raise ValueError("ensemble weights must be finite, non-negative, and non-zero")
+    weights /= weights.sum()
+
+    eval_dataset = EEGDataset(X_eval, y_eval)
+    eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
+    for model in (dcn_model, eeg_model, eeg_k25_model):
+        model.eval()
+
+    correct = {
+        "deep_conv_net": torch.zeros((), device=device),
+        "eegnet": torch.zeros((), device=device),
+        "ensemble_dcn_eegnet": torch.zeros((), device=device),
+        "eegnet_k25": torch.zeros((), device=device),
+        "ensemble_3_k25": torch.zeros((), device=device),
+    }
+    total = 0
+    with torch.inference_mode():
+        for batch_x, batch_y in eval_loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            dcn_logits = dcn_model(batch_x)
+            eeg_logits = eeg_model(batch_x)
+            k25_logits = eeg_k25_model(batch_x)
+            logits = {
+                "deep_conv_net": dcn_logits,
+                "eegnet": eeg_logits,
+                "ensemble_dcn_eegnet": (dcn_logits + eeg_logits) / 2.0,
+                "eegnet_k25": k25_logits,
+                "ensemble_3_k25": (
+                    weights[0] * dcn_logits
+                    + weights[1] * eeg_logits
+                    + weights[2] * k25_logits
+                ),
+            }
+            for name, output in logits.items():
+                correct[name] += output.argmax(dim=1).eq(batch_y).sum()
+            total += batch_y.size(0)
+
+    accuracies = {
+        name: (count.item() / total) * 100
+        for name, count in correct.items()
+    }
+    print(f"\n--- ENSEMBLE COMPONENTS {split_name.upper()} EVALUATION ---")
+    for name, accuracy in accuracies.items():
+        print(
+            f"  * {name.upper():<25} "
+            f"{split_name.title()} Accuracy: {accuracy:.2f}%"
+        )
+    print(
+        f"  * Fixed weights: DCN={weights[0]:.3f}, "
+        f"EEGNet={weights[1]:.3f}, EEGNet k25={weights[2]:.3f}"
+    )
+    return accuracies
+
+
 # -----------------------------------------------------------------------------
 # 4. Baseline Machine Learning Classifier
 # -----------------------------------------------------------------------------
@@ -1397,17 +1466,6 @@ if __name__ == "__main__":
             return_candidates=True,
         )
 
-        print("\n--- EEGNET K=15 DEVELOPMENT CANDIDATE COMPARISON ---")
-        eeg_candidate_validation = {}
-        for candidate_name, candidate_model in eeg_candidates.items():
-            eeg_candidate_validation[candidate_name] = evaluate_model_on_split(
-                f"eegnet_k15_{candidate_name}",
-                candidate_model,
-                X_val,
-                y_val,
-                device,
-                split_name="development",
-            )
 
         print("\n--- DCN + EEGNET K=15 DEVELOPMENT CANDIDATE COMPARISON ---")
         ensemble_candidate_validation = {}
@@ -1445,30 +1503,6 @@ if __name__ == "__main__":
             f"{selected_eeg_name}"
         )
 
-        results["deep_conv_net"] = evaluate_model_on_split(
-            "deep_conv_net",
-            dcn_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
-        results["eegnet"] = evaluate_model_on_split(
-            "eegnet",
-            eeg_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
-        results["ensemble_dcn_eegnet"] = evaluate_ensemble_on_split(
-            dcn_model,
-            eeg_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
 
         (
             eeg_k25_model,
@@ -1501,15 +1535,7 @@ if __name__ == "__main__":
             artifact_root=DEFAULT_CHECKPOINT_ROOT,
             return_candidates=True,
         )
-        results["eegnet_k25"] = evaluate_model_on_split(
-            "eegnet_k25",
-            eeg_k25_model,
-            X_eval,
-            y_eval,
-            device,
-            split_name=evaluation_name,
-        )
-        results["ensemble_3_k25"] = evaluate_ensemble_3_fixed_on_split(
+        bundle_results = evaluate_ensemble_bundle_on_split(
             dcn_model,
             eeg_model,
             eeg_k25_model,
@@ -1519,8 +1545,9 @@ if __name__ == "__main__":
             split_name=evaluation_name,
             w_dcn=5,
             w_eeg=5,
-            w_ei=1,
+            w_k25=1,
         )
+        results.update(bundle_results)
     if args.include_baseline:
         results["logistic_regression"] = run_logistic_regression_baseline(
             X_train,
