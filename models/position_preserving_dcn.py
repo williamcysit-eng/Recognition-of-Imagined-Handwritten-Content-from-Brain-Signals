@@ -26,7 +26,7 @@ class PositionPreservingDeepConvNet(DeepConvNet):
         F3: int = 80,
         temporal_kernel: int = 15,
         dropout_rate: float = 0.5,
-        projection_features: int = 32,
+        projection_features: int = 64,
     ) -> None:
         if projection_features <= 0:
             raise ValueError("projection_features must be positive")
