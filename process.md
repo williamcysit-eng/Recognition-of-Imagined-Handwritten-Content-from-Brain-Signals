@@ -537,21 +537,27 @@ and no test labels or test-derived statistics were accessed.
 | `acc1-compressed-dcn-20260914` | Position-preserving DCN with a configuration-derived compressed-model seed | 19.74% | Rejected |
 | `acc1-fix-compressed-seed-20260914` | Same head with the baseline DCN seed stream | **20.90%** | Accepted |
 | `acc2-projection48-20260914` | Position-preserving DCN projection width 32 → 48 | 20.00% | Rejected; source change rolled back |
+| `acc3-projection64-20260914` | Position-preserving DCN projection width 32 → 64 | **21.15%** | **Accepted** |
 
-The fixed 5:5:1 baseline was 20.26%. The accepted implementation is recorded
-in commit `3ef773f`; the ensemble now uses the position-preserving DCN head by
-default while `--model deep_conv_net` retains the standalone full head.
+The fixed 5:5:1 baseline was 20.26%. The 32-feature implementation was
+accepted in commit `3ef773f`; the 64-feature implementation is accepted in
+commit `c305688`. The current ensemble uses the 64-feature position-preserving
+DCN head while `--model deep_conv_net` retains the standalone full head.
 
-The saved selected checkpoints reproduced the accepted 20.90% development
-result before any test inference. The DCN checkpoint came from `exp43-head`;
-the EEGNet k=15 and k=25 checkpoints came from `full-ensemble-20260906`.
-A single locked inference-only evaluation of the frozen test partition then
-measured **25.64%** for `ensemble_3_k25`. This test result was not used for any
-architecture, weight, ensemble-weight, or candidate-selection decision.
+The saved checkpoints from the prior 32-feature recipe reproduced its accepted
+20.90% development result before one locked test inference measured **25.64%**.
+That test result predates the 64-feature update and was not used to choose it;
+the current 64-feature recipe has no test result.
 
-The projection-width candidate completed its full development-only run in
-1,802.53 seconds and was rejected because it reduced the ensemble result by
-0.90 percentage points. Its generated checkpoints were removed.
+The projection-width 48 candidate completed its full development-only run in
+1,802.53 seconds, scored 20.00%, and was rejected because it reduced the
+ensemble result by 0.90 percentage points. Its source change and generated
+checkpoints were removed.
+
+The projection-width 64 candidate completed its full development-only run in
+1,800.07 seconds, scored 21.15%, and was kept for a +0.25 percentage-point
+development improvement. Its generated checkpoints remain transient and are
+not a test-evaluation artifact.
 
 ---
 

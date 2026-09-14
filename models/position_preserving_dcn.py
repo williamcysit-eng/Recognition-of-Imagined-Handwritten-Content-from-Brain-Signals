@@ -12,7 +12,7 @@ class PositionPreservingDeepConvNet(DeepConvNet):
     """DeepConvNet with a shared 1x1 feature bottleneck.
 
     The convolutional stem is unchanged. Its 80 feature channels are projected
-    to 32 channels at every output time position, then all 100 positions are
+    to 64 channels at every output time position, then all 100 positions are
     flattened for classification. No temporal pooling is added to the head.
     """
 
