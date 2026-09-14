@@ -117,7 +117,7 @@ Parameters: 278,246
 
 **Design rationale:** DeepConvNet uses standard conv-pool blocks to learn hierarchical spatiotemporal features. Block 1 combines temporal filtering (across time) with spatial integration (across electrodes). Blocks 2–3 extract progressively more abstract features. The 15-sample temporal kernel at 250 Hz captures 60 ms of EEG dynamics, which is well-suited for ERP components (P1 at ~100 ms, N170 at ~170 ms, P3 at ~300 ms).
 
-### 2. Position-preserving DeepConvNet head (development ablation)
+### 2. Position-preserving DeepConvNet head (default ensemble DCN)
 
 The unchanged DeepConvNet stem can use a smaller classifier without removing
 temporal alignment:
@@ -129,13 +129,16 @@ temporal alignment:
     → Linear(3,200, 26)
 ```
 
-This variant has 156,006 parameters, compared with 278,246 for the unchanged
-DeepConvNet. Run it with `--model compressed_deep_conv_net`; the default
-ensemble remains unchanged. On the fixed development partition, the matched
-baseline-seed ablation scored 16.92% versus 13.85% for the stored full-head DCN.
-Replacing DCN in the fixed 5:5:1 three-model mixture scored 20.90% versus
-20.26% for the stored baseline mixture. These are development-only,
-single-seed selection measurements, not new test-set results.
+This variant has 156,006 parameters, compared with 278,246 for the standalone
+full-head DeepConvNet. Run it directly with `--model compressed_deep_conv_net`;
+the `--model ensemble` path now uses this position-preserving head for its DCN
+component. In the full development-only ensemble experiment, the fixed 5:5:1
+mixture improved from **20.26% to 20.90%**. This is a validation-only result,
+not a new test-set result.
+
+The standalone compressed-head model reached 16.92% development accuracy in
+the matched baseline-seed run. The convolutional stem and temporal positions
+remain unchanged; only the classifier head is reduced.
 
 ### 3. EEGNet
 
@@ -217,8 +220,8 @@ All models share a common training infrastructure:
 
 | Model | Augmentations | Label Smoothing | Temporal Kernel | SWA |
 |-------|:---:|:---:|:---:|:---:|
-| DeepConvNet | None (clean data) | 0.0 | 15 (60 ms) | Off |
-| Position-preserving DCN | None (clean data) | 0.0 | 15 (60 ms) | Off |
+| Standalone DeepConvNet | None (clean data) | 0.0 | 15 (60 ms) | Off |
+| Ensemble DCN head | None (clean data) | 0.0 | 15 (60 ms) | Off |
 | EEGNet (k=15) | Mixup (α=0.2) + Gaussian noise (σ=0.07) | 0.1 | 15 (60 ms) | On (epoch 25+) |
 | EEGNet (k=25) | Mixup (α=0.2) + Gaussian noise (σ=0.07) | 0.1 | 25 (100 ms) | Off (best ckpt) |
 | EEGInception | Mixup (α=0.2) | 0.1 | — | Off |
@@ -247,7 +250,7 @@ The pipeline employs multiple orthogonal regularization strategies:
 
 ## Ensemble Method
 
-The final model is a **weighted logit-averaging ensemble** of three models — DeepConvNet plus two EEGNet variants with different temporal kernel sizes (15 and 25 samples):
+The final model is a **weighted logit-averaging ensemble** of three models — the position-preserving DeepConvNet head plus two EEGNet variants with different temporal kernel sizes (15 and 25 samples):
 
 ```python
 outputs = (5 * dcn_logits + 5 * eegnet_k15_logits + 1 * eegnet_k25_logits) / 11
@@ -262,11 +265,11 @@ The second EEGNet (kernel=25, 100 ms) is trained with the same Mixup (α=0.2) an
 
 ### Why Ensemble Works
 
-DeepConvNet and the two EEGNet variants have fundamentally different inductive biases:
+The position-preserving DCN and the two EEGNet variants have fundamentally different inductive biases:
 
-| Property | DeepConvNet | EEGNet (k=15) | EEGNet (k=25) |
+| Property | Position-preserving DCN | EEGNet (k=15) | EEGNet (k=25) |
 |----------|-------------|----------------|----------------|
-| Architecture | Standard conv-pool blocks | Depthwise separable + attention | Depthwise separable + attention |
+| Architecture | Conv-pool stem + ordered projection head | Depthwise separable + attention | Depthwise separable + attention |
 | Spatial processing | Full conv across all channels | Depthwise groups + anatomical prior | Depthwise groups + anatomical prior |
 | Temporal processing | Hierarchical (3 blocks) | Single block + CBAM, 60ms window | Single block + CBAM, 100ms window |
 | Regularization | Dropout + WD | Mixup + noise + max-norm + SWA | Mixup + noise + max-norm |
@@ -302,6 +305,14 @@ All results are **deterministic and reproducible** for a fixed base seed and con
 | **DCN + EEGNet (k=15) + EEGNet (k=25) — 3-model** | **22.18%** |
 
 The accepted baseline tables above are retained for comparison. The point-3 regression run measured 23.72% with independent model RNG streams, validation-selected SWA plus fitting-only BatchNorm recalibration, and no test-cohort adaptation.
+
+### Current development recipe
+
+The default `--model ensemble --development-only` command uses the
+position-preserving DCN head in the 5:5:1 logit ensemble. Its full
+development-only validation result is **20.90%**, compared with **20.26%** for
+the previous full-head DCN recipe. The fixed split and inductive evaluation
+protocol remain unchanged; this is not a held-out test result.
 
 ### Temporal Kernel Ablation
 
