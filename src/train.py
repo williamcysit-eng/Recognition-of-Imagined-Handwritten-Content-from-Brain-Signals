@@ -647,7 +647,11 @@ def train_deep_learning_model(
         generator=loader_generator,
         **dl_kwargs,
     )
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=max(batch_size, 128),
+        shuffle=False,
+    )
 
     criterion = nn.CrossEntropyLoss(
         label_smoothing=(
