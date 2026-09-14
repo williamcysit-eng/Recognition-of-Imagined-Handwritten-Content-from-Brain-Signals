@@ -314,15 +314,20 @@ The default `--model ensemble --development-only` command uses the
 64-feature position-preserving DCN head in the 5:5:1 logit ensemble. Its full
 development-only validation result is **21.15%**, compared with **20.90%** for
 the prior 32-feature head and **20.26%** for the previous full-head DCN recipe.
-The fixed split and inductive evaluation protocol remain unchanged; no test
-evaluation has been run for the current 64-feature recipe.
+The fixed split and inductive evaluation protocol remain unchanged.
 
 ### Prior locked evaluation — 32-feature interim recipe
 
 Before the 64-feature update, one inference-only evaluation of the frozen test
 partition scored **25.64%** for `ensemble_3_k25`. That result belongs to the
-prior 32-feature recipe and was not used to change any decision. It must not be
-reported as the final test result for the current 64-feature recipe.
+prior 32-feature recipe and was not used to change any decision.
+
+### Locked final evaluation — current 64-feature recipe
+
+After the 64-feature development recipe was locked, one inference-only
+evaluation of the frozen test partition scored **24.23%** for
+`ensemble_3_k25`. This result was not used for any further architecture,
+weight, ensemble-weight, or candidate-selection decision.
 
 ### Temporal Kernel Ablation
 

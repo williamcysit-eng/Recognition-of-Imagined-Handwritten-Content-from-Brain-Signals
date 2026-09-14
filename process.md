@@ -546,8 +546,10 @@ DCN head while `--model deep_conv_net` retains the standalone full head.
 
 The saved checkpoints from the prior 32-feature recipe reproduced its accepted
 20.90% development result before one locked test inference measured **25.64%**.
-That test result predates the 64-feature update and was not used to choose it;
-the current 64-feature recipe has no test result.
+That result predates the 64-feature update and was not used to choose it.
+The current 64-feature recipe then received one locked test evaluation:
+**24.23%** for `ensemble_3_k25`. No test result was used for any further
+architecture, weight, ensemble-weight, or candidate-selection decision.
 
 The projection-width 48 candidate completed its full development-only run in
 1,802.53 seconds, scored 20.00%, and was rejected because it reduced the
@@ -558,6 +560,9 @@ The projection-width 64 candidate completed its full development-only run in
 1,800.07 seconds, scored 21.15%, and was kept for a +0.25 percentage-point
 development improvement. Its generated checkpoints remain transient and are
 not a test-evaluation artifact.
+
+The final width-64 test run completed in 1,784.26 seconds. Its generated
+checkpoints were removed after recording the result.
 
 ---
 
