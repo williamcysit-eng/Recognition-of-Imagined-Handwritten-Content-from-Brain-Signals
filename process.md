@@ -542,3 +542,26 @@ the EEGNet k=15 and k=25 checkpoints came from `full-ensemble-20260906`.
 A single locked inference-only evaluation of the frozen test partition then
 measured **25.64%** for `ensemble_3_k25`. This test result was not used for any
 architecture, weight, ensemble-weight, or candidate-selection decision.
+
+---
+
+## Part 13: Efficiency-only implementation changes (2026-09-14)
+
+The following commits were tried to reduce runtime, memory traffic, or
+unnecessary work. They are not accuracy experiments: they do not change the
+split, model recipe, weights, or validation candidate-selection policy.
+
+| Commit | Change | Scope |
+|---|---|---|
+| `43fcc6d` | Reduce device synchronization in training metrics | Training-loop runtime |
+| `b17845e` | Avoid redundant EEG dataset tensor copies | Memory traffic |
+| `831fc4d` | Make logistic regression baseline opt-in | Avoid unused work |
+| `bcdee5d` | Bundle final ensemble evaluation passes | Evaluation runtime |
+| `fca7140` | Avoid scanning EEGNet parameters for max-norm work | Training-loop runtime |
+| `b421ef1` | Defer redundant standalone ensemble candidate validation | Validation runtime |
+| `3779c76` | Use larger validation batches | Validation runtime |
+| `6042a3f` | Avoid computing unused metric maxima | Evaluation runtime |
+| `97555fc` | Use nonblocking device transfers | Device-transfer runtime |
+
+These changes were kept for execution efficiency and were not used to select
+the final accuracy recipe.
