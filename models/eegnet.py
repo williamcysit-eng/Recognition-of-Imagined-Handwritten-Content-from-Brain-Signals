@@ -210,18 +210,15 @@ def apply_max_norm_constraints(model, max_norm_spatial=1.0, max_norm_fc=0.25):
     Applies Max-Norm weight constraints after the optimizer step as described in the 
     original EEGNet publication. This bounds individual filters to prevent overfitting.
     """
-    for name, param in model.named_parameters():
-        # Constrain spatial depthwise weights across channels (dim=2)
-        if 'spatial_conv.0.weight' in name:
-            norms = torch.norm(param.data, p=2, dim=2, keepdim=True)
-            desired = torch.clamp(norms, max=max_norm_spatial)
-            param.data *= (desired / (norms + 1e-10))
-            
-        # Constrain Dense Classification layer weights (dim=1)
-        elif 'fc.1.weight' in name:
-            norms = torch.norm(param.data, p=2, dim=1, keepdim=True)
-            desired = torch.clamp(norms, max=max_norm_fc)
-            param.data *= (desired / (norms + 1e-10))
+    spatial_weight = model.spatial_conv[0].weight
+    spatial_norms = torch.norm(spatial_weight.data, p=2, dim=2, keepdim=True)
+    spatial_desired = torch.clamp(spatial_norms, max=max_norm_spatial)
+    spatial_weight.data *= spatial_desired / (spatial_norms + 1e-10)
+
+    fc_weight = model.fc[1].weight
+    fc_norms = torch.norm(fc_weight.data, p=2, dim=1, keepdim=True)
+    fc_desired = torch.clamp(fc_norms, max=max_norm_fc)
+    fc_weight.data *= fc_desired / (fc_norms + 1e-10)
 
 
 
