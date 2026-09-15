@@ -586,3 +586,35 @@ split, model recipe, weights, or validation candidate-selection policy.
 
 These changes were kept for execution efficiency and were not used to select
 the final accuracy recipe.
+
+---
+
+## Part 14: Guided validation-only optimization (2026-09-15)
+
+All completed experiments used the frozen development split with:
+
+```bash
+python src/train.py --model ensemble --development-only --seed 42
+```
+
+The held-out test partition was not materialized for evaluation, and no test
+labels, test-derived statistics, or test feedback were used. Each completed
+idea received one full training run. The starting development
+`ensemble_3_k25` accuracy was
+**21.15%**.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc4-common-average-reference-20260915` | Per-trial instantaneous common-average rereferencing across the 24 channels | **21.67%** | Accepted; committed as `f4f874a` |
+| `acc5-nonlinear-projection-20260915` | Add BatchNorm and ELU to the compressed DCN's 1x1 projection bottleneck | 20.26% | Rejected; source and artifacts rolled back |
+| `acc6-selective-weight-decay-20260915` | Exclude biases and BatchNorm affine parameters from AdamW weight decay | **21.79%** | Accepted; committed as `c9ccbe6` |
+| `acc7-trial-rms-20260915` | Normalize every rereferenced trial independently to unit RMS | 20.90% | Rejected; source and artifacts rolled back |
+| `acc8-lookahead-dcn-20260915` | Apply Lookahead (`k=5`, `alpha=0.5`) to the compressed DCN optimizer | 21.54% | Rejected; source and artifacts rolled back |
+| `acc9-centered-rms-logits-20260915` | Center and RMS-normalize each model's per-trial logits before fixed-weight fusion | 21.28% | Rejected; source and artifacts rolled back |
+| `acc10-final-ensemble-selection-20260915` | Select the k=15 best/SWA candidate by the final three-model ensemble rather than the two-model ensemble | 21.79% | Rejected as a tie; source and artifacts rolled back |
+| `acc11-top3-k25-average-20260915` | Average the three lowest-validation-loss k=25 checkpoints, then recalibrate BatchNorm from fitting data only | 21.41% | Rejected; source and artifacts rolled back |
+| `acc12-scalp-only-reference-20260915` | Exclude mastoid channels M1/M2 from the common-reference estimate while retaining them as model inputs | Not measured | Aborted at the user's stop request before final evaluation; source and artifacts rolled back |
+
+The retained recipe ends at **21.79%** (170/780 correct), a **+0.64
+percentage-point** gain over the 21.15% starting point. The requested 22%
+threshold (at least 172/780 correct) was not reached before the run was stopped.
