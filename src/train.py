@@ -567,6 +567,30 @@ def select_time_window(data, time_points, window):
 # -----------------------------------------------------------------------------
 # 2. General Training Loop
 # -----------------------------------------------------------------------------
+def _adamw_parameter_groups(model, weight_decay):
+    """Leave biases and BatchNorm affine terms out of weight decay."""
+    no_decay_ids = set()
+    for module in model.modules():
+        bias = getattr(module, "bias", None)
+        if isinstance(bias, nn.Parameter):
+            no_decay_ids.add(id(bias))
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            no_decay_ids.update(
+                id(parameter) for parameter in module.parameters(False)
+            )
+
+    decay, no_decay = [], []
+    for parameter in model.parameters():
+        if not parameter.requires_grad:
+            continue
+        target = no_decay if id(parameter) in no_decay_ids else decay
+        target.append(parameter)
+    return (
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    )
+
+
 def train_deep_learning_model(
     model_type,
     X_train,
@@ -672,7 +696,7 @@ def train_deep_learning_model(
             else 0.1
         )
     )
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
+    optimizer = optim.AdamW(_adamw_parameter_groups(model, 0.05), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
