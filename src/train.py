@@ -459,6 +459,12 @@ DEFAULT_MIXUP_ALPHA = 0.2
 # -----------------------------------------------------------------------------
 # 1. Loading and Splitting Data
 # -----------------------------------------------------------------------------
+def _common_average_reference(data):
+    """Remove each trial's instantaneous common-mode channel signal in place."""
+    data -= data.mean(axis=1, keepdims=True)
+    return data
+
+
 def load_and_split_data_pipeline(
     npz_path,
     downsample_factor=1,
@@ -514,10 +520,13 @@ def load_and_split_data_pipeline(
         f"  - Train: {len(train_idx)} | Validation: {len(val_idx)} | "
         f"Test: {len(test_idx)}"
     )
-    X_train, y_train = data[train_idx], labels[train_idx]
-    X_val, y_val = data[val_idx], labels[val_idx]
+    X_train = _common_average_reference(data[train_idx])
+    y_train = labels[train_idx]
+    X_val = _common_average_reference(data[val_idx])
+    y_val = labels[val_idx]
     if include_test:
-        X_test, y_test = data[test_idx], labels[test_idx]
+        X_test = _common_average_reference(data[test_idx])
+        y_test = labels[test_idx]
     else:
         X_test, y_test = None, None
 
