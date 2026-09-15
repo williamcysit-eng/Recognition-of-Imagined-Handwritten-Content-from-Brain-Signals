@@ -459,6 +459,12 @@ DEFAULT_MIXUP_ALPHA = 0.2
 # -----------------------------------------------------------------------------
 # 1. Loading and Splitting Data
 # -----------------------------------------------------------------------------
+def _common_average_reference(data):
+    """Remove each trial's instantaneous common-mode channel signal in place."""
+    data -= data.mean(axis=1, keepdims=True)
+    return data
+
+
 def load_and_split_data_pipeline(
     npz_path,
     downsample_factor=1,
@@ -514,10 +520,13 @@ def load_and_split_data_pipeline(
         f"  - Train: {len(train_idx)} | Validation: {len(val_idx)} | "
         f"Test: {len(test_idx)}"
     )
-    X_train, y_train = data[train_idx], labels[train_idx]
-    X_val, y_val = data[val_idx], labels[val_idx]
+    X_train = _common_average_reference(data[train_idx])
+    y_train = labels[train_idx]
+    X_val = _common_average_reference(data[val_idx])
+    y_val = labels[val_idx]
     if include_test:
-        X_test, y_test = data[test_idx], labels[test_idx]
+        X_test = _common_average_reference(data[test_idx])
+        y_test = labels[test_idx]
     else:
         X_test, y_test = None, None
 
@@ -558,6 +567,30 @@ def select_time_window(data, time_points, window):
 # -----------------------------------------------------------------------------
 # 2. General Training Loop
 # -----------------------------------------------------------------------------
+def _adamw_parameter_groups(model, weight_decay):
+    """Leave biases and BatchNorm affine terms out of weight decay."""
+    no_decay_ids = set()
+    for module in model.modules():
+        bias = getattr(module, "bias", None)
+        if isinstance(bias, nn.Parameter):
+            no_decay_ids.add(id(bias))
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            no_decay_ids.update(
+                id(parameter) for parameter in module.parameters(False)
+            )
+
+    decay, no_decay = [], []
+    for parameter in model.parameters():
+        if not parameter.requires_grad:
+            continue
+        target = no_decay if id(parameter) in no_decay_ids else decay
+        target.append(parameter)
+    return (
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    )
+
+
 def train_deep_learning_model(
     model_type,
     X_train,
@@ -663,7 +696,7 @@ def train_deep_learning_model(
             else 0.1
         )
     )
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.05)
+    optimizer = optim.AdamW(_adamw_parameter_groups(model, 0.05), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",

@@ -124,21 +124,23 @@ temporal alignment:
 
 ```
 80 features × 100 output positions
-    → shared bias-free 1×1 projection (80→32)
-    → flatten 3,200 ordered features
-    → Linear(3,200, 26)
+    → shared bias-free 1×1 projection (80→64)
+    → flatten 6,400 ordered features
+    → Linear(6,400, 26)
 ```
 
-This variant has 156,006 parameters, compared with 278,246 for the standalone
-full-head DeepConvNet. Run it directly with `--model compressed_deep_conv_net`;
-the `--model ensemble` path now uses this position-preserving head for its DCN
-component. In the full development-only ensemble experiment, the fixed 5:5:1
-mixture improved from **20.26% to 20.90%**. This is a validation-only result,
-not a new test-set result.
+The current 64-feature variant has 241,766 parameters, compared with 278,246
+for the standalone full-head DeepConvNet. Run it directly with
+`--model compressed_deep_conv_net`; the `--model ensemble` path uses this
+position-preserving head for its DCN component. The full development-only
+ensemble result is now **21.15%**, compared with **20.90%** for the prior
+32-feature head and **20.26%** for the previous full-head recipe. These are
+validation-only results; no test result has been measured for the current
+64-feature recipe.
 
-The standalone compressed-head model reached 16.92% development accuracy in
-the matched baseline-seed run. The convolutional stem and temporal positions
-remain unchanged; only the classifier head is reduced.
+The earlier 32-feature variant reached 16.92% standalone development accuracy
+in its matched baseline-seed run. The convolutional stem and temporal
+positions remain unchanged; only the classifier head width differs.
 
 ### 3. EEGNet
 
@@ -309,17 +311,23 @@ The accepted baseline tables above are retained for comparison. The point-3 regr
 ### Current development recipe
 
 The default `--model ensemble --development-only` command uses the
-position-preserving DCN head in the 5:5:1 logit ensemble. Its full
-development-only validation result is **20.90%**, compared with **20.26%** for
-the previous full-head DCN recipe. The fixed split and inductive evaluation
-protocol remain unchanged; this is not a held-out test result.
+64-feature position-preserving DCN head in the 5:5:1 logit ensemble. Its full
+development-only validation result is **21.15%**, compared with **20.90%** for
+the prior 32-feature head and **20.26%** for the previous full-head DCN recipe.
+The fixed split and inductive evaluation protocol remain unchanged.
 
-### Locked final evaluation
+### Prior locked evaluation — 32-feature interim recipe
 
-After the development recipe and checkpoint selection were locked, one
-inference-only evaluation of the frozen test partition scored **25.64%** for
-`ensemble_3_k25`. The test result was not used to change the architecture,
-weights, ensemble weights, or any selection decision.
+Before the 64-feature update, one inference-only evaluation of the frozen test
+partition scored **25.64%** for `ensemble_3_k25`. That result belongs to the
+prior 32-feature recipe and was not used to change any decision.
+
+### Locked final evaluation — current 64-feature recipe
+
+After the 64-feature development recipe was locked, one inference-only
+evaluation of the frozen test partition scored **24.23%** for
+`ensemble_3_k25`. This result was not used for any further architecture,
+weight, ensemble-weight, or candidate-selection decision.
 
 ### Temporal Kernel Ablation
 
