@@ -528,8 +528,7 @@ The 4.x and 5.x development results support the compressed DCN head as the accep
 
 ## Part 12: Validation-only accuracy optimization (2026-09-14)
 
-The first accuracy experiment changed only the ensemble's DCN component. Every
-run used the fixed development split and
+The accuracy experiments used the fixed development split and
 `--model ensemble --development-only`; the test partition was not materialized,
 and no test labels or test-derived statistics were accessed.
 
@@ -537,17 +536,33 @@ and no test labels or test-derived statistics were accessed.
 |---|---|---:|---|
 | `acc1-compressed-dcn-20260914` | Position-preserving DCN with a configuration-derived compressed-model seed | 19.74% | Rejected |
 | `acc1-fix-compressed-seed-20260914` | Same head with the baseline DCN seed stream | **20.90%** | Accepted |
+| `acc2-projection48-20260914` | Position-preserving DCN projection width 32 → 48 | 20.00% | Rejected; source change rolled back |
+| `acc3-projection64-20260914` | Position-preserving DCN projection width 32 → 64 | **21.15%** | **Accepted** |
 
-The fixed 5:5:1 baseline was 20.26%. The accepted implementation is recorded
-in commit `3ef773f`; the ensemble now uses the position-preserving DCN head by
-default while `--model deep_conv_net` retains the standalone full head.
+The fixed 5:5:1 baseline was 20.26%. The 32-feature implementation was
+accepted in commit `3ef773f`; the 64-feature implementation is accepted in
+commit `c305688`. The current ensemble uses the 64-feature position-preserving
+DCN head while `--model deep_conv_net` retains the standalone full head.
 
-The saved selected checkpoints reproduced the accepted 20.90% development
-result before any test inference. The DCN checkpoint came from `exp43-head`;
-the EEGNet k=15 and k=25 checkpoints came from `full-ensemble-20260906`.
-A single locked inference-only evaluation of the frozen test partition then
-measured **25.64%** for `ensemble_3_k25`. This test result was not used for any
+The saved checkpoints from the prior 32-feature recipe reproduced its accepted
+20.90% development result before one locked test inference measured **25.64%**.
+That result predates the 64-feature update and was not used to choose it.
+The current 64-feature recipe then received one locked test evaluation:
+**24.23%** for `ensemble_3_k25`. No test result was used for any further
 architecture, weight, ensemble-weight, or candidate-selection decision.
+
+The projection-width 48 candidate completed its full development-only run in
+1,802.53 seconds, scored 20.00%, and was rejected because it reduced the
+ensemble result by 0.90 percentage points. Its source change and generated
+checkpoints were removed.
+
+The projection-width 64 candidate completed its full development-only run in
+1,800.07 seconds, scored 21.15%, and was kept for a +0.25 percentage-point
+development improvement. Its generated checkpoints remain transient and are
+not a test-evaluation artifact.
+
+The final width-64 test run completed in 1,784.26 seconds. Its generated
+checkpoints were removed after recording the result.
 
 ---
 
@@ -571,3 +586,54 @@ split, model recipe, weights, or validation candidate-selection policy.
 
 These changes were kept for execution efficiency and were not used to select
 the final accuracy recipe.
+
+---
+
+## Part 14: Guided validation-only optimization (2026-09-15)
+
+All completed experiments used the frozen development split with:
+
+```bash
+python src/train.py --model ensemble --development-only --seed 42
+```
+
+The held-out test partition was not materialized for evaluation, and no test
+labels, test-derived statistics, or test feedback were used. Each completed
+idea received one full training run. The starting development
+`ensemble_3_k25` accuracy was
+**21.15%**.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc4-common-average-reference-20260915` | Per-trial instantaneous common-average rereferencing across the 24 channels | **21.67%** | Accepted; committed as `f4f874a` |
+| `acc5-nonlinear-projection-20260915` | Add BatchNorm and ELU to the compressed DCN's 1x1 projection bottleneck | 20.26% | Rejected; source and artifacts rolled back |
+| `acc6-selective-weight-decay-20260915` | Exclude biases and BatchNorm affine parameters from AdamW weight decay | **21.79%** | Accepted; committed as `c9ccbe6` |
+| `acc7-trial-rms-20260915` | Normalize every rereferenced trial independently to unit RMS | 20.90% | Rejected; source and artifacts rolled back |
+| `acc8-lookahead-dcn-20260915` | Apply Lookahead (`k=5`, `alpha=0.5`) to the compressed DCN optimizer | 21.54% | Rejected; source and artifacts rolled back |
+| `acc9-centered-rms-logits-20260915` | Center and RMS-normalize each model's per-trial logits before fixed-weight fusion | 21.28% | Rejected; source and artifacts rolled back |
+| `acc10-final-ensemble-selection-20260915` | Select the k=15 best/SWA candidate by the final three-model ensemble rather than the two-model ensemble | 21.79% | Rejected as a tie; source and artifacts rolled back |
+| `acc11-top3-k25-average-20260915` | Average the three lowest-validation-loss k=25 checkpoints, then recalibrate BatchNorm from fitting data only | 21.41% | Rejected; source and artifacts rolled back |
+| `acc12-scalp-only-reference-20260915` | Exclude mastoid channels M1/M2 from the common-reference estimate while retaining them as model inputs | Not measured | Aborted at the user's stop request before final evaluation; source and artifacts rolled back |
+
+The retained recipe ends at **21.79%** (170/780 correct), a **+0.64
+percentage-point** gain over the 21.15% starting point. The requested 22%
+threshold (at least 172/780 correct) was not reached before the run was stopped.
+
+---
+
+## Part 15: Guided validation-only optimization (2026-09-16)
+
+All runs use `python src/train.py --model ensemble --development-only --seed 42`;
+the held-out test partition is not materialized for evaluation.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc13-equal-multikernel-20260916` | Equal logit weights for the DCN, EEGNet k=15, and EEGNet k=25 components | **23.21%** (181/780) | **Accepted**; +1.41 percentage points |
+
+The full run completed successfully in 28m58s. The accepted recipe now meets
+the 23% validation target without materializing the held-out test partition.
+
+After the recipe was locked, one checkpoint-only evaluation loaded the three
+selected artifacts without retraining, adaptation, or candidate selection.
+The equal-weight ensemble scored **26.28%** (205/780) on the held-out test
+partition; this result was not used to change the recipe.
