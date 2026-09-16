@@ -637,3 +637,65 @@ After the recipe was locked, one checkpoint-only evaluation loaded the three
 selected artifacts without retraining, adaptation, or candidate selection.
 The equal-weight ensemble scored **26.28%** (205/780) on the held-out test
 partition; this result was not used to change the recipe.
+
+---
+
+## Part 16: Guided validation-only optimization (2026-09-16)
+
+All runs use `.venv/bin/python src/train.py --model ensemble --development-only
+--seed 42`; the explicit test path remains unused.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc14-temporal-pool24-20260916` | Increase EEGNet's position-preserving temporal summary from 16 to 24 bins | 19.74% (154/780) | Rejected; source and artifacts rolled back |
+| `acc15-per-sample-mixup-20260916` | Draw independent Mixup coefficients per EEGNet example instead of once per batch | 21.41% (167/780) | Rejected; source and artifacts rolled back |
+| `acc16-fitting-prior-correction-20260916` | Correct the ensemble's class prior using aggregate fitting-set predictions and the known uniform target prior | **24.10% (188/780)** | **Accepted**; +0.90 percentage points |
+
+The full validation-only run completed in 30m42s. Finer temporal bins reduced
+the accepted 23.21% ensemble by 3.47 percentage points.
+
+The per-sample Mixup run completed in 35m36s and reduced the ensemble by 1.80
+percentage points, so batch-shared Mixup remains the accepted recipe.
+
+The fitting-prior correction run completed in 29m10s and reached the 24%
+target. The correction uses fitting inputs only; the explicit test path was
+not invoked. The accepted source and run artifacts were retained.
+
+After commit `4806c40` froze the accepted recipe, one checkpoint-only test
+evaluation loaded the three selected `acc16` artifacts. The fitting-prior
+correction was recomputed from the fitting partition only; model state remained
+tensor-for-tensor identical to the saved checkpoints. The ensemble scored **26.03%**
+(203/780). This result was recorded without further model or recipe changes.
+
+---
+
+## Part 17: Guided validation-only optimization toward 25% (2026-09-16)
+
+All runs use `.venv/bin/python src/train.py --model ensemble --development-only
+--seed 42`; no test inputs, labels, statistics, results, or feedback are used.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc17-best-swa-logit-blend-20260916` | Blend the EEGNet k=15 best-checkpoint and fitting-recalibrated SWA logits at fixed 75/25 weights | **24.49% (191/780)** | **Accepted**; +0.39 percentage points |
+| `acc18-eegnet-average-pool-20260916` | Replace EEGNet's first max-pooling operation with standard average pooling | 22.44% (175/780) | Rejected; source and artifacts rolled back |
+| `acc19-odd-separable-kernel-20260916` | Use a centered 15-sample EEGNet separable temporal kernel instead of the even 16-sample kernel | 22.18% (173/780) | Rejected; source and artifacts rolled back |
+| `acc20-k25-k35-logit-blend-20260916` | Blend an independently trained EEGNet k=35 into the k=25 variant at fixed 25% logit weight | Not measured | Aborted at the user's stop request; source and artifacts rolled back |
+
+The full validation-only run completed in 29m05s. Both SWA BatchNorm
+recalibration and the ensemble class-prior correction used fitting inputs
+only. The explicit test path remained unused.
+
+The average-pooling run completed in 28m31s and reduced the ensemble by 2.05
+percentage points, so EEGNet retains max pooling.
+
+The odd separable-kernel run completed in 29m55s and reduced the ensemble by
+2.31 percentage points, so the 16-sample kernel remains accepted.
+
+The k35 blend run was stopped after 17m03s, during k=25 epoch 11, before k=35
+training or final validation evaluation. It produced no comparable result.
+
+After the user stopped the validation search, one checkpoint-only evaluation
+loaded the accepted `acc17` artifacts. The fitting-prior correction used the
+fitting partition only, and no retraining, adaptation, or candidate selection
+occurred. The fixed recipe scored **25.64%** (200/780) on the test partition;
+the result was not used for any subsequent recipe decision.
