@@ -136,9 +136,9 @@ for the standalone full-head DeepConvNet. Run it directly with
 position-preserving head for its DCN component. Its initial development-only
 ensemble result was **21.15%**, compared with **20.90%** for the prior
 32-feature head and **20.26%** for the previous full-head DCN recipe. These
-are validation-only reference results; the later accepted common-average
-rereferencing and selective AdamW decay updates brought the full recipe to
-**21.79%**.
+are validation-only reference results; common-average rereferencing and
+selective AdamW decay brought the recipe to **21.79%**, and equal weighting
+of all three multi-kernel ensemble components raised it to **23.21%**.
 
 The earlier 32-feature variant reached 16.92% standalone development accuracy
 in its matched baseline-seed run. The convolutional stem and temporal
@@ -254,10 +254,10 @@ The pipeline employs multiple orthogonal regularization strategies:
 
 ## Ensemble Method
 
-The final model is a **weighted logit-averaging ensemble** of three models — the position-preserving DeepConvNet head plus two EEGNet variants with different temporal kernel sizes (15 and 25 samples):
+The final model is an **equal logit-averaging ensemble** of three models — the position-preserving DeepConvNet head plus two EEGNet variants with different temporal kernel sizes (15 and 25 samples):
 
 ```python
-outputs = (5 * dcn_logits + 5 * eegnet_k15_logits + 1 * eegnet_k25_logits) / 11
+outputs = (dcn_logits + eegnet_k15_logits + eegnet_k25_logits) / 3
 prediction = argmax(outputs)
 ```
 
@@ -313,12 +313,18 @@ The accepted baseline tables above are retained for comparison. The point-3 regr
 ### Current development recipe
 
 The default `--model ensemble --development-only` command uses the
-64-feature position-preserving DCN head in the 5:5:1 logit ensemble. Its full
-development-only validation result is **21.79%** (170/780 correct), following
-per-trial common-average rereferencing and selective AdamW decay (biases and
-BatchNorm affine terms excluded). This is a development-only result; the
-held-out test partition has not been re-evaluated after these changes. The
-fixed split and inductive evaluation protocol remain unchanged.
+64-feature position-preserving DCN head and equal logit weights for all three
+components. Its full development-only validation result is **23.21%**
+(181/780 correct), following per-trial common-average rereferencing and
+selective AdamW decay (biases and BatchNorm affine terms excluded). This is a
+development-only result; the held-out test partition has not been evaluated
+for this recipe. The fixed split and inductive evaluation protocol remain
+unchanged.
+
+### Guided validation-only attempts
+
+The `acc13-equal-multikernel-20260916` run raised validation accuracy from
+**21.79%** to **23.21%** by equally weighting the three components; it was accepted.
 
 ### Prior locked evaluation — 32-feature interim recipe
 

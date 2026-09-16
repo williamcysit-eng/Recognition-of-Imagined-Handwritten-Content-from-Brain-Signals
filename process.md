@@ -618,3 +618,17 @@ idea received one full training run. The starting development
 The retained recipe ends at **21.79%** (170/780 correct), a **+0.64
 percentage-point** gain over the 21.15% starting point. The requested 22%
 threshold (at least 172/780 correct) was not reached before the run was stopped.
+
+---
+
+## Part 15: Guided validation-only optimization (2026-09-16)
+
+All runs use `python src/train.py --model ensemble --development-only --seed 42`;
+the held-out test partition is not materialized for evaluation.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc13-equal-multikernel-20260916` | Equal logit weights for the DCN, EEGNet k=15, and EEGNet k=25 components | **23.21%** (181/780) | **Accepted**; +1.41 percentage points |
+
+The full run completed successfully in 28m58s. The accepted recipe now meets
+the 23% validation target without materializing the held-out test partition.

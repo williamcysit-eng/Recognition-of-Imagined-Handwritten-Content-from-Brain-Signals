@@ -1122,8 +1122,8 @@ def evaluate_ensemble_bundle_on_split(
     y_eval,
     device,
     split_name="development",
-    w_dcn=5.0,
-    w_eeg=5.0,
+    w_dcn=1.0,
+    w_eeg=1.0,
     w_k25=1.0,
     dcn_result_name="deep_conv_net",
 ):
@@ -1614,8 +1614,8 @@ if __name__ == "__main__":
             y_eval,
             device,
             split_name=evaluation_name,
-            w_dcn=5,
-            w_eeg=5,
+            w_dcn=1,
+            w_eeg=1,
             w_k25=1,
             dcn_result_name=dcn_model_type,
         )
