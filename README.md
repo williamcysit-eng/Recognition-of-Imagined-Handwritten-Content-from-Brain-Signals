@@ -24,7 +24,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with 240 fitting examples per class under the frozen split.
 
-The current fitting-calibrated equal-weight ensemble reached **24.10% validation accuracy** (188/780). The preceding uncorrected recipe scored **26.28% single-trial test accuracy** (205/780) in an earlier frozen-checkpoint evaluation with no test-cohort adaptation. No test evaluation was run for the current recipe. Because the held-out split was evaluated in earlier repository experiments, the historical test figure is a strict-inductive result on a reused holdout, not a pristine external benchmark.
+The current fitting-calibrated equal-weight ensemble reached **24.10% validation accuracy** (188/780) and **26.03% test accuracy** (203/780). The test result came from a checkpoint-only evaluation after the recipe was committed; it performed no retraining, adaptation, or selection. The preceding uncorrected recipe scored 26.28% in an earlier evaluation. Because this holdout has been evaluated repeatedly during the repository's history, these are strict-inductive measurements on a reused holdout, not pristine external-benchmark estimates.
 
 ---
 
@@ -325,9 +325,10 @@ The default `--model ensemble --development-only` command uses the
 fitting-derived uniform-prior correction. Its full development-only
 validation result is **24.10%** (188/780 correct), following per-trial
 common-average rereferencing and selective AdamW decay (biases and BatchNorm
-affine terms excluded). The earlier **26.28%** frozen-checkpoint test result
-belongs to the uncorrected recipe; the current recipe has not been evaluated
-on the test partition.
+affine terms excluded). A checkpoint-only evaluation after the recipe was
+committed scored **26.03%** (203/780) on the test partition. It performed no
+retraining, test-cohort adaptation, or candidate selection, and its result was
+not used to alter the recipe.
 
 ### Guided validation-only attempts
 

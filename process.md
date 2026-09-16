@@ -660,3 +660,9 @@ percentage points, so batch-shared Mixup remains the accepted recipe.
 The fitting-prior correction run completed in 29m10s and reached the 24%
 target. The correction uses fitting inputs only; the explicit test path was
 not invoked. The accepted source and run artifacts were retained.
+
+After commit `4806c40` froze the accepted recipe, one checkpoint-only test
+evaluation loaded the three selected `acc16` artifacts. The fitting-prior
+correction was recomputed from the fitting partition only; model state remained
+tensor-for-tensor identical to the saved checkpoints. The ensemble scored **26.03%**
+(203/780). This result was recorded without further model or recipe changes.
