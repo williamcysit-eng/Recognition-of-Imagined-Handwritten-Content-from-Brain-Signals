@@ -666,3 +666,18 @@ evaluation loaded the three selected `acc16` artifacts. The fitting-prior
 correction was recomputed from the fitting partition only; model state remained
 tensor-for-tensor identical to the saved checkpoints. The ensemble scored **26.03%**
 (203/780). This result was recorded without further model or recipe changes.
+
+---
+
+## Part 17: Guided validation-only optimization toward 25% (2026-09-16)
+
+All runs use `.venv/bin/python src/train.py --model ensemble --development-only
+--seed 42`; no test inputs, labels, statistics, results, or feedback are used.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc17-best-swa-logit-blend-20260916` | Blend the EEGNet k=15 best-checkpoint and fitting-recalibrated SWA logits at fixed 75/25 weights | **24.49% (191/780)** | **Accepted**; +0.39 percentage points |
+
+The full validation-only run completed in 29m05s. Both SWA BatchNorm
+recalibration and the ensemble class-prior correction used fitting inputs
+only. The explicit test path remained unused.

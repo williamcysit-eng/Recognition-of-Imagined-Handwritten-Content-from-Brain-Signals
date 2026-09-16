@@ -285,6 +285,7 @@ def _record_selected_artifact(
     selected_name,
     selection_scope,
     selection_metrics=None,
+    inference_blend=None,
 ):
     """Persist the candidate that the caller actually evaluates."""
     _save_checkpoint(selected_model, artifact_info["selected"])
@@ -294,6 +295,8 @@ def _record_selected_artifact(
     metadata["selection_scope"] = selection_scope
     if selection_metrics is not None:
         metadata["ensemble_candidate_validation"] = selection_metrics
+    if inference_blend is not None:
+        metadata["ensemble_inference_blend"] = inference_blend
     with open(artifact_info["metadata"], "w", encoding="utf-8") as metadata_file:
         json.dump(metadata, metadata_file, indent=2)
     artifact_info["selected_candidate"] = selected_name
@@ -1117,6 +1120,7 @@ def evaluate_ensemble_3_fixed_on_split(
 def evaluate_ensemble_bundle_on_split(
     dcn_model,
     eeg_model,
+    eeg_swa_model,
     eeg_k25_model,
     X_calibration,
     y_calibration,
@@ -1127,6 +1131,7 @@ def evaluate_ensemble_bundle_on_split(
     w_dcn=1.0,
     w_eeg=1.0,
     w_k25=1.0,
+    eeg_swa_weight=0.25,
     dcn_result_name="deep_conv_net",
 ):
     """Evaluate components and a fitting-derived prior-corrected ensemble."""
@@ -1139,6 +1144,8 @@ def evaluate_ensemble_bundle_on_split(
         raise ValueError(
             "ensemble weights must be finite, non-negative, and non-zero"
         )
+    if not 0.0 <= eeg_swa_weight <= 1.0:
+        raise ValueError("EEGNet SWA blend weight must be between zero and one")
     score_weights = weights / weights.mean()
     reported_weights = weights / weights.sum()
 
@@ -1148,7 +1155,7 @@ def evaluate_ensemble_bundle_on_split(
     )
     eval_dataset = EEGDataset(X_eval, y_eval)
     eval_loader = DataLoader(eval_dataset, batch_size=128, shuffle=False)
-    for model in (dcn_model, eeg_model, eeg_k25_model):
+    for model in (dcn_model, eeg_model, eeg_swa_model, eeg_k25_model):
         model.eval()
 
     class_probability_sum = None
@@ -1156,9 +1163,13 @@ def evaluate_ensemble_bundle_on_split(
     with torch.inference_mode():
         for batch_x, _ in calibration_loader:
             batch_x = batch_x.to(device, non_blocking=True)
+            eeg_logits = (
+                (1.0 - eeg_swa_weight) * eeg_model(batch_x)
+                + eeg_swa_weight * eeg_swa_model(batch_x)
+            )
             ensemble_logits = (
                 score_weights[0] * dcn_model(batch_x)
-                + score_weights[1] * eeg_model(batch_x)
+                + score_weights[1] * eeg_logits
                 + score_weights[2] * eeg_k25_model(batch_x)
             )
             batch_probability_sum = (
@@ -1189,7 +1200,10 @@ def evaluate_ensemble_bundle_on_split(
                 batch_y.to(device, non_blocking=True),
             )
             dcn_logits = dcn_model(batch_x)
-            eeg_logits = eeg_model(batch_x)
+            eeg_logits = (
+                (1.0 - eeg_swa_weight) * eeg_model(batch_x)
+                + eeg_swa_weight * eeg_swa_model(batch_x)
+            )
             k25_logits = eeg_k25_model(batch_x)
             ensemble_logits = (
                 score_weights[0] * dcn_logits
@@ -1221,6 +1235,10 @@ def evaluate_ensemble_bundle_on_split(
         f"  * Fixed weights: DCN={reported_weights[0]:.3f}, "
         f"EEGNet={reported_weights[1]:.3f}, "
         f"EEGNet k25={reported_weights[2]:.3f}"
+    )
+    print(
+        "  * EEGNet k15 logit blend: "
+        f"best={1.0 - eeg_swa_weight:.3f}, SWA={eeg_swa_weight:.3f}"
     )
     print("  * Uniform class-prior correction estimated from the fitting split")
     return accuracies
@@ -1592,24 +1610,25 @@ if __name__ == "__main__":
                 )
             )
 
-        selected_eeg_name = "best"
-        if (
-            "swa" in ensemble_candidate_validation
-            and ensemble_candidate_validation["swa"]
-            > ensemble_candidate_validation["best"]
-        ):
-            selected_eeg_name = "swa"
-        eeg_model = eeg_candidates[selected_eeg_name]
+        if "swa" not in eeg_candidates:
+            raise RuntimeError("EEGNet k=15 SWA candidate was not produced")
+        eeg_model = eeg_candidates["best"]
+        eeg_swa_model = eeg_candidates["swa"]
+        eeg_swa_weight = 0.25
         _record_selected_artifact(
             eeg_artifacts,
             eeg_model,
-            selected_eeg_name,
-            selection_scope="ensemble_validation_only",
+            "best",
+            selection_scope="fixed_best_swa_logit_blend",
             selection_metrics=ensemble_candidate_validation,
+            inference_blend={
+                "best": 1.0 - eeg_swa_weight,
+                "swa": eeg_swa_weight,
+            },
         )
         print(
-            "Selected EEGNet k=15 candidate from ensemble validation: "
-            f"{selected_eeg_name}"
+            "Selected fixed EEGNet k=15 logit blend: "
+            f"best={1.0 - eeg_swa_weight:.2f}, SWA={eeg_swa_weight:.2f}"
         )
 
 
@@ -1648,6 +1667,7 @@ if __name__ == "__main__":
         bundle_results = evaluate_ensemble_bundle_on_split(
             dcn_model,
             eeg_model,
+            eeg_swa_model,
             eeg_k25_model,
             X_train,
             y_train,
@@ -1658,6 +1678,7 @@ if __name__ == "__main__":
             w_dcn=1,
             w_eeg=1,
             w_k25=1,
+            eeg_swa_weight=eeg_swa_weight,
             dcn_result_name=dcn_model_type,
         )
         results.update(bundle_results)

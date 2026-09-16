@@ -24,7 +24,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with 240 fitting examples per class under the frozen split.
 
-The current fitting-calibrated equal-weight ensemble reached **24.10% validation accuracy** (188/780) and **26.03% test accuracy** (203/780). The test result came from a checkpoint-only evaluation after the recipe was committed; it performed no retraining, adaptation, or selection. The preceding uncorrected recipe scored 26.28% in an earlier evaluation. Because this holdout has been evaluated repeatedly during the repository's history, these are strict-inductive measurements on a reused holdout, not pristine external-benchmark estimates.
+The current fitting-calibrated ensemble reached **24.49% validation accuracy** (191/780). Its EEGNet k=15 component blends best-checkpoint and fitting-recalibrated SWA logits at fixed 75/25 weights before equal three-component fusion. It has not been evaluated on the test partition. The preceding unblended recipe scored 26.03% in a checkpoint-only test evaluation, while an earlier uncorrected recipe scored 26.28%. Because this holdout has been evaluated repeatedly during the repository's history, those are strict-inductive measurements on a reused holdout, not pristine external-benchmark estimates.
 
 ---
 
@@ -254,22 +254,23 @@ The pipeline employs multiple orthogonal regularization strategies:
 
 ## Ensemble Method
 
-The final model uses equal logit weights for three models — the
-position-preserving DeepConvNet head plus EEGNet variants with temporal
-kernels of 15 and 25 samples. It estimates the ensemble's predicted class
-marginal on the fitting split and corrects it toward the known uniform class
-prior:
+The final model uses three equally weighted components: the
+position-preserving DeepConvNet head, a fixed 75/25 blend of EEGNet k=15
+best-checkpoint and fitting-recalibrated SWA logits, and EEGNet k=25. It
+estimates the ensemble's predicted class marginal on the fitting split and
+corrects it toward the known uniform class prior:
 
 ```python
+eegnet_k15_logits = 0.75 * best_logits + 0.25 * swa_logits
 raw_logits = dcn_logits + eegnet_k15_logits + eegnet_k25_logits
 fitting_log_prior = log(mean(softmax(raw_fitting_logits), axis=trials))
 prediction = argmax(raw_logits - fitting_log_prior)
 ```
 
-The scale of the summed logits is intentional. The correction is estimated
-once from fitting inputs after training. Evaluation trials are processed by
-frozen model state and never contribute features, labels, BatchNorm
-statistics, or other updates to the correction.
+The scale of the summed logits is intentional. SWA BatchNorm statistics and
+the class-prior correction are estimated from fitting inputs only. Evaluation
+trials are processed by frozen model state and never contribute features,
+labels, BatchNorm statistics, or other updates.
 
 ### Multi-Kernel EEGNet Variant
 
@@ -321,14 +322,13 @@ The accepted baseline tables above are retained for comparison. A later historic
 ### Current locked recipe
 
 The default `--model ensemble --development-only` command uses the
-64-feature position-preserving DCN head, equal logit weights, and the
-fitting-derived uniform-prior correction. Its full development-only
-validation result is **24.10%** (188/780 correct), following per-trial
-common-average rereferencing and selective AdamW decay (biases and BatchNorm
-affine terms excluded). A checkpoint-only evaluation after the recipe was
-committed scored **26.03%** (203/780) on the test partition. It performed no
-retraining, test-cohort adaptation, or candidate selection, and its result was
-not used to alter the recipe.
+64-feature position-preserving DCN head, the fixed EEGNet k=15 best/SWA logit
+blend, equal three-component weights, and the fitting-derived uniform-prior
+correction. Its full development-only validation result is **24.49%**
+(191/780 correct), following per-trial common-average rereferencing and
+selective AdamW decay (biases and BatchNorm affine terms excluded). This
+recipe has not been evaluated on the test partition; the documented 26.03%
+test result belongs to the preceding unblended recipe.
 
 ### Guided validation-only attempts
 
@@ -344,6 +344,10 @@ coefficient per EEGNet example, but regressed validation accuracy to **21.41%** 
 The `acc16-fitting-prior-correction-20260916` run applied a single uniform
 class-prior correction estimated only from aggregate fitting-set ensemble
 predictions. It raised validation accuracy to **24.10%** (188/780) and was accepted.
+
+The `acc17-best-swa-logit-blend-20260916` run evaluated a fixed 75/25 blend
+of the EEGNet k=15 best-checkpoint and fitting-recalibrated SWA logits. It
+raised validation accuracy to **24.49%** (191/780) and was accepted.
 
 ### Prior locked evaluation — 32-feature interim recipe
 
