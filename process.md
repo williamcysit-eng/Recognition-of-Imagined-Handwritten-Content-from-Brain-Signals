@@ -637,3 +637,26 @@ After the recipe was locked, one checkpoint-only evaluation loaded the three
 selected artifacts without retraining, adaptation, or candidate selection.
 The equal-weight ensemble scored **26.28%** (205/780) on the held-out test
 partition; this result was not used to change the recipe.
+
+---
+
+## Part 16: Guided validation-only optimization (2026-09-16)
+
+All runs use `.venv/bin/python src/train.py --model ensemble --development-only
+--seed 42`; the explicit test path remains unused.
+
+| Run | New idea | Development `ensemble_3_k25` | Decision |
+|---|---|---:|---|
+| `acc14-temporal-pool24-20260916` | Increase EEGNet's position-preserving temporal summary from 16 to 24 bins | 19.74% (154/780) | Rejected; source and artifacts rolled back |
+| `acc15-per-sample-mixup-20260916` | Draw independent Mixup coefficients per EEGNet example instead of once per batch | 21.41% (167/780) | Rejected; source and artifacts rolled back |
+| `acc16-fitting-prior-correction-20260916` | Correct the ensemble's class prior using aggregate fitting-set predictions and the known uniform target prior | **24.10% (188/780)** | **Accepted**; +0.90 percentage points |
+
+The full validation-only run completed in 30m42s. Finer temporal bins reduced
+the accepted 23.21% ensemble by 3.47 percentage points.
+
+The per-sample Mixup run completed in 35m36s and reduced the ensemble by 1.80
+percentage points, so batch-shared Mixup remains the accepted recipe.
+
+The fitting-prior correction run completed in 29m10s and reached the 24%
+target. The correction uses fitting inputs only; the explicit test path was
+not invoked. The accepted source and run artifacts were retained.
