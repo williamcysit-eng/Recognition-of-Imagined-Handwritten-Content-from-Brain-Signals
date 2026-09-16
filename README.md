@@ -24,7 +24,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with 240 fitting examples per class under the frozen split.
 
-The current fitting-calibrated ensemble reached **24.49% validation accuracy** (191/780). Its EEGNet k=15 component blends best-checkpoint and fitting-recalibrated SWA logits at fixed 75/25 weights before equal three-component fusion. It has not been evaluated on the test partition. The preceding unblended recipe scored 26.03% in a checkpoint-only test evaluation, while an earlier uncorrected recipe scored 26.28%. Because this holdout has been evaluated repeatedly during the repository's history, those are strict-inductive measurements on a reused holdout, not pristine external-benchmark estimates.
+The current fitting-calibrated ensemble reached **24.49% validation accuracy** (191/780) and **25.64% test accuracy** (200/780). Its EEGNet k=15 component blends best-checkpoint and fitting-recalibrated SWA logits at fixed 75/25 weights before equal three-component fusion. The test result came from a checkpoint-only evaluation after the optimization run was stopped; it performed no retraining, adaptation, or selection. The preceding unblended recipe scored 26.03%, while an earlier uncorrected recipe scored 26.28%. Because this holdout has been evaluated repeatedly during the repository's history, these are strict-inductive measurements on a reused holdout, not pristine external-benchmark estimates.
 
 ---
 
@@ -326,9 +326,10 @@ The default `--model ensemble --development-only` command uses the
 blend, equal three-component weights, and the fitting-derived uniform-prior
 correction. Its full development-only validation result is **24.49%**
 (191/780 correct), following per-trial common-average rereferencing and
-selective AdamW decay (biases and BatchNorm affine terms excluded). This
-recipe has not been evaluated on the test partition; the documented 26.03%
-test result belongs to the preceding unblended recipe.
+selective AdamW decay (biases and BatchNorm affine terms excluded). After the
+optimization run was stopped, a checkpoint-only test evaluation scored
+**25.64%** (200/780). It performed no retraining, test-cohort adaptation, or
+candidate selection, and no subsequent recipe decision used the result.
 
 ### Guided validation-only attempts
 
@@ -348,6 +349,18 @@ predictions. It raised validation accuracy to **24.10%** (188/780) and was accep
 The `acc17-best-swa-logit-blend-20260916` run evaluated a fixed 75/25 blend
 of the EEGNet k=15 best-checkpoint and fitting-recalibrated SWA logits. It
 raised validation accuracy to **24.49%** (191/780) and was accepted.
+
+The `acc18-eegnet-average-pool-20260916` run replaced EEGNet's first
+max-pooling layer with standard average pooling, but validation regressed to
+**22.44%** (175/780), so the change was rejected.
+
+The `acc19-odd-separable-kernel-20260916` run changed EEGNet's second temporal
+kernel from 16 samples to a centered 15-sample kernel, but validation regressed
+to **22.18%** (173/780), so the change was rejected.
+
+The `acc20-k25-k35-logit-blend-20260916` run began training an independent
+EEGNet k=35 for a fixed k25/k35 blend, but was stopped before completion at
+the user's request. No validation result was produced, and the change was rolled back.
 
 ### Prior locked evaluation — 32-feature interim recipe
 

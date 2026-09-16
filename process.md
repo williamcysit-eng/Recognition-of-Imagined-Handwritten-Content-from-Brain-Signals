@@ -677,7 +677,25 @@ All runs use `.venv/bin/python src/train.py --model ensemble --development-only
 | Run | New idea | Development `ensemble_3_k25` | Decision |
 |---|---|---:|---|
 | `acc17-best-swa-logit-blend-20260916` | Blend the EEGNet k=15 best-checkpoint and fitting-recalibrated SWA logits at fixed 75/25 weights | **24.49% (191/780)** | **Accepted**; +0.39 percentage points |
+| `acc18-eegnet-average-pool-20260916` | Replace EEGNet's first max-pooling operation with standard average pooling | 22.44% (175/780) | Rejected; source and artifacts rolled back |
+| `acc19-odd-separable-kernel-20260916` | Use a centered 15-sample EEGNet separable temporal kernel instead of the even 16-sample kernel | 22.18% (173/780) | Rejected; source and artifacts rolled back |
+| `acc20-k25-k35-logit-blend-20260916` | Blend an independently trained EEGNet k=35 into the k=25 variant at fixed 25% logit weight | Not measured | Aborted at the user's stop request; source and artifacts rolled back |
 
 The full validation-only run completed in 29m05s. Both SWA BatchNorm
 recalibration and the ensemble class-prior correction used fitting inputs
 only. The explicit test path remained unused.
+
+The average-pooling run completed in 28m31s and reduced the ensemble by 2.05
+percentage points, so EEGNet retains max pooling.
+
+The odd separable-kernel run completed in 29m55s and reduced the ensemble by
+2.31 percentage points, so the 16-sample kernel remains accepted.
+
+The k35 blend run was stopped after 17m03s, during k=25 epoch 11, before k=35
+training or final validation evaluation. It produced no comparable result.
+
+After the user stopped the validation search, one checkpoint-only evaluation
+loaded the accepted `acc17` artifacts. The fitting-prior correction used the
+fitting partition only, and no retraining, adaptation, or candidate selection
+occurred. The fixed recipe scored **25.64%** (200/780) on the test partition;
+the result was not used for any subsequent recipe decision.
