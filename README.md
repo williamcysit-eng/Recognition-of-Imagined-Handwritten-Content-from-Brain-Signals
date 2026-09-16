@@ -69,13 +69,14 @@ data/processed/eeg_dataset.npz
 
 ## Preprocessing
 
-Preprocessing is performed in `src/extract.py`:
+Preprocessing and model-input preparation are performed in `src/extract.py` and `src/train.py`:
 
 1. **Load MATLAB data:** Reads `data_EEG_AI.mat` using `scipy.io.loadmat`.
 2. **Transpose:** Converts from MATLAB format (24, 801, 7800) → ML format (7800, 24, 801).
 3. **Label conversion:** 1-indexed (1–26) → 0-indexed (0–25) for PyTorch compatibility.
 4. **Channel name extraction:** Cleans the cell array of 24 electrode labels.
 5. **Save as .npz:** Compressed NumPy archive for fast subsequent loading.
+6. **Common-average reference:** Before fitting or evaluation, `src/train.py` subtracts each trial's instantaneous mean across all 24 channels.
 
 The data is provided **already preprocessed** with major artifacts removed, baselined, and bandpass filtered between 0.1–45 Hz. Verify the provider's exact normalization and fitting scope before treating preprocessing as split-safe.
 
@@ -132,11 +133,12 @@ temporal alignment:
 The current 64-feature variant has 241,766 parameters, compared with 278,246
 for the standalone full-head DeepConvNet. Run it directly with
 `--model compressed_deep_conv_net`; the `--model ensemble` path uses this
-position-preserving head for its DCN component. The full development-only
-ensemble result is now **21.15%**, compared with **20.90%** for the prior
-32-feature head and **20.26%** for the previous full-head recipe. These are
-validation-only results; no test result has been measured for the current
-64-feature recipe.
+position-preserving head for its DCN component. Its initial development-only
+ensemble result was **21.15%**, compared with **20.90%** for the prior
+32-feature head and **20.26%** for the previous full-head DCN recipe. These
+are validation-only reference results; the later accepted common-average
+rereferencing and selective AdamW decay updates brought the full recipe to
+**21.79%**.
 
 The earlier 32-feature variant reached 16.92% standalone development accuracy
 in its matched baseline-seed run. The convolutional stem and temporal
@@ -152,11 +154,11 @@ Input: (B, 1, 24, 801)
 VisualROISpatialPrior: Channel-wise attention (anatomical prior for visual/motor ROIs)
 Block 1: Conv2d(1→32, (1,15)) → BN → DepthwiseConv2d(32→128, (24,1), groups=32) → BN → ELU → MaxPool(1,4) → Dropout(0.3)
 CBAM-EEG: Channel attention (shared MLP) + Temporal attention (conv-based)
-Block 2: SeparableConv2d(128→128, (1,16)) → PointwiseConv2d(128→64) → BN → ELU → AdaptiveAvgPool(1,16) → Dropout(0.3)
+Block 2: SeparableConv2d(128→128, (1,16)) → PointwiseConv2d(128→64) → BN → ELU → AdaptiveTemporalAvgPool2d(16) → Dropout(0.3)
 
 FC: Flatten → Linear(1024,128) → ELU → Dropout(0.3) → Linear(128,26)
 
-Parameters: 157,344
+Parameters: 157,024 (kernel=15; kernel=25 has 157,344)
 Max-Norm constraints applied after each optimizer step.
 
 Ensemble configuration: kernel=15 (60 ms temporal window).
@@ -178,7 +180,7 @@ Conv Block 2: Conv(48→48, (1,3)) → BN → ELU → AvgPool(1,2) → Dropout(0
 
 FC: Linear(2400, 26)
 
-Parameters: 243,655
+Parameters: 242,978
 ```
 
 **Design rationale:** The Inception modules extract information at three temporal scales simultaneously (56 ms, 40 ms, 24 ms at 250 Hz). Different handwriting imagery processes — visual encoding, motor planning, and execution imagery — may be encoded in distinct frequency bands and time scales. The multi-scale parallel convolutions capture this diversity in a single forward pass.
@@ -207,7 +209,7 @@ All models share a common training infrastructure:
 
 | Component | Configuration |
 |-----------|---------------|
-| **Optimizer** | AdamW, learning rate = 0.005, weight decay = 0.05 |
+| **Optimizer** | AdamW, learning rate = 0.005, weight decay = 0.05 on decay-eligible weights (biases and BatchNorm affine terms excluded) |
 | **LR Scheduler** | ReduceLROnPlateau (mode=min, factor=0.5, patience=3, min_lr=1e−6) |
 | **Loss Function** | Cross-Entropy with label smoothing (0.0 for DeepConvNet and compressed DCN, 0.1 for EEGNet/EEGInception) |
 | **Batch Size** | 64 |
@@ -242,7 +244,7 @@ The pipeline employs multiple orthogonal regularization strategies:
 4. **Label Smoothing (0.1):** Softens one-hot targets from (0, 0, 1, 0) to (0.025, 0.025, 0.975, 0.025). Prevents the model from becoming overconfident.
 5. **Max-Norm Constraints (EEGNet only):** Bounds the L2 norm of spatial filter weights (max 1.0) and FC layer weights (max 0.25). Enforces a compact weight space.
 6. **Early Stopping:** Halts training when validation loss fails to improve for 40 consecutive epochs. Prevents overfitting to training data.
-7. **Weight Decay (0.05):** L2 regularisation on all parameters via AdamW.
+7. **Weight Decay (0.05):** L2 regularisation via AdamW for decay-eligible weights; biases and BatchNorm affine terms are excluded.
 8. **ReduceLROnPlateau:** Halves the learning rate when validation loss plateaus for 3 epochs, allowing the model to settle into finer minima.
 9. **Batch Size (64):** Smaller batches introduce beneficial gradient noise that acts as an implicit regulariser.
 10. **Stochastic Weight Averaging (SWA):** Applied to the primary EEGNet (k=15) in ensemble mode starting from epoch 25 with `AveragedModel(use_buffers=False)`. Its BatchNorm buffers are recalibrated using clean fitting-partition inputs only. Best-checkpoint and recalibrated SWA candidates are compared individually and in the ensemble on development data; the selected candidate is recorded in metadata. The k=25 variant uses best-checkpoint weights.
@@ -297,7 +299,7 @@ All results are **deterministic and reproducible** for a fixed base seed and con
 | EEGNet (k=15, no SWA) | 19.49% | 157,024 | 250 Hz, mixup+noise, kernel=15 |
 | EEGNet (k=15, with SWA) | 17.44% | 157,024 | 250 Hz, mixup+noise, kernel=15, SWA |
 | EEGNet (k=25, no SWA) | 16.67% | 157,344 | 250 Hz, mixup+noise, kernel=25 |
-| EEGInception | 16.67% | 243,655 | 250 Hz, mixup, kernels=(7,5,3) |
+| EEGInception | 16.67% | 242,978 | 250 Hz, mixup, kernels=(7,5,3) |
 
 ### Accepted V5.6.2 Baseline — Ensemble Performance
 
@@ -312,9 +314,11 @@ The accepted baseline tables above are retained for comparison. The point-3 regr
 
 The default `--model ensemble --development-only` command uses the
 64-feature position-preserving DCN head in the 5:5:1 logit ensemble. Its full
-development-only validation result is **21.15%**, compared with **20.90%** for
-the prior 32-feature head and **20.26%** for the previous full-head DCN recipe.
-The fixed split and inductive evaluation protocol remain unchanged.
+development-only validation result is **21.79%** (170/780 correct), following
+per-trial common-average rereferencing and selective AdamW decay (biases and
+BatchNorm affine terms excluded). This is a development-only result; the
+held-out test partition has not been re-evaluated after these changes. The
+fixed split and inductive evaluation protocol remain unchanged.
 
 ### Prior locked evaluation — 32-feature interim recipe
 
@@ -322,10 +326,10 @@ Before the 64-feature update, one inference-only evaluation of the frozen test
 partition scored **25.64%** for `ensemble_3_k25`. That result belongs to the
 prior 32-feature recipe and was not used to change any decision.
 
-### Locked final evaluation — current 64-feature recipe
+### Locked width-64 evaluation before later development-only changes
 
-After the 64-feature development recipe was locked, one inference-only
-evaluation of the frozen test partition scored **24.23%** for
+Before the later common-average rereferencing and selective AdamW changes, one
+inference-only evaluation of the frozen test partition scored **24.23%** for
 `ensemble_3_k25`. This result was not used for any further architecture,
 weight, ensemble-weight, or candidate-selection decision.
 
@@ -399,7 +403,7 @@ python src/train.py --model ensemble --fast --quick 10
 | `--downsample` | Temporal downsampling factor | `1` (250 Hz) |
 | `--window` | Recorded-time ablation: `full`, `early`, or `late` | `full` |
 | `--epochs` | Maximum training epochs | `150` |
-| `--no-mixup` | Disable Mixup augmentation during training | Enabled for `ensemble`/`eegnet` |
+| `--no-mixup` | Disable Mixup augmentation during training | Enabled by default; the ensemble DCN component disables it |
 | `--mixup-alpha` | Beta distribution alpha for Mixup | `0.2` |
 | `--noise-std` | Gaussian noise standard deviation | `0.0` (off) |
 | `--cpu` | Force CPU training | `False` |
@@ -440,16 +444,14 @@ The trade-off: different cuDNN algorithms produce slightly different floating-po
 ### Apple Silicon: Metal (MPS)
 
 Supported Apple Silicon Macs automatically run training and evaluation on the
-integrated GPU through PyTorch MPS. EEGNet uses an equivalent fixed averaging
-projection because MPS does not support non-divisible adaptive average-pooling
-input sizes.
+integrated GPU through PyTorch MPS. EEGNet uses a fixed linear temporal
+averaging projection, so the model definition is shared across backends.
 Fresh MPS training preserves the model definition but is not expected to be
 bit-identical to CUDA because backend kernels use different floating-point
 accumulation paths.
+### CPU: Optimizations
 
-### CPU: Optimizations (Zero Accuracy Loss)
-
-Training on CPU is invoked automatically when neither CUDA nor MPS is available, or forced with `--cpu`. Several layers of optimization are applied that preserve identical numerical results to the GPU path:
+Training on CPU is invoked automatically when neither CUDA nor MPS is available, or forced with `--cpu`. Several layers of optimization reduce CPU overhead while keeping the CPU path deterministic:
 
 | Optimization | Mechanism | Speedup |
 |---|---|---|
@@ -459,16 +461,11 @@ Training on CPU is invoked automatically when neither CUDA nor MPS is available,
 | DataLoader workers | `num_workers=2` — overlaps data loading with forward/backward | minor |
 | Pre-converted float32 | avoids per-batch dtype cast | minor |
 
-### CPU: Parallel Ensemble Training
+### CPU: Ensemble Training
 
-DeepConvNet and EEGNet are completely independent during training — no shared parameters, no weight exchange. On CPU, the ensemble pipeline exploits this by launching both models in **parallel threads** via `ThreadPoolExecutor`. PyTorch releases the GIL during MKL-DNN operations, allowing both threads to execute simultaneously across available cores.
-
-| Approach | GPU Wall Time | CPU Wall Time |
-|---|---|---|
-| Sequential DCN → EEGNet | ~6 min | ~51 min |
-| Parallel (2 threads) | N/A | **~27 min** |
-
-The parallel path produces identical model weights to sequential CPU training (both use MKL-DNN with deterministic algorithms). Activation requires no additional flags — `python src/train.py --model ensemble --cpu` automatically parallelizes the ensemble.
+On CPU, ensemble components train sequentially with isolated model-specific
+RNG streams. This avoids shared process-global RNG state; thread-based
+parallel ensemble training is not used.
 
 ### What Was Tried and Rejected
 
@@ -534,7 +531,7 @@ Handwriting imagery involves rapid, fine-grained neural dynamics distinct from s
 ### Why Ensemble?
 
 DeepConvNet and EEGNet represent different points on the bias-variance trade-off:
-- DeepConvNet has higher capacity (278K params) and uses minimal regularisation (dropout only) — it captures complex features but risks overfitting.
+- **DeepConvNet** has higher capacity (278K params) and uses dropout plus selective AdamW weight decay without data augmentation — it captures complex features but risks overfitting.
 - EEGNet (k=15, 60 ms) has lower capacity (157K params) and uses aggressive regularisation (mixup, noise, max-norm, SWA) — it learns robust but potentially simpler features.
 - EEGNet (k=25, 100 ms) uses the same regularisation as the primary EEGNet but with a longer temporal kernel — it captures slower ERP components (P3 at ~300 ms) that the 60 ms window may truncate.
 
