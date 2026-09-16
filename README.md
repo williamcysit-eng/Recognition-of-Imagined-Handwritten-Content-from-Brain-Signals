@@ -24,7 +24,7 @@ Classification of 26 imagined handwritten alphabets (A–Z) from single-trial EE
 
 This project develops single-trial EEG classifiers to decode which of the 26 English alphabet letters a participant is imagining handwriting. The core challenge is the extreme difficulty of the task — 26-way classification from noisy, high-dimensional brain signals with 240 fitting examples per class under the frozen split.
 
-The strict-inductive point-3 regression run measured **23.72% single-trial test accuracy**, above the accepted V5.6.2 baseline, with no test-cohort adaptation.
+The current locked equal-weight ensemble reached **23.21% validation accuracy** and **26.28% single-trial test accuracy** (205/780) using frozen checkpoints with no test-cohort adaptation. Because this held-out split was evaluated in earlier repository experiments, the test figure is a strict-inductive result on a historically reused holdout, not a pristine external benchmark.
 
 ---
 
@@ -308,9 +308,9 @@ All results are **deterministic and reproducible** for a fixed base seed and con
 | DCN + EEGNet (k=15) — 2-model baseline | 21.79% |
 | **DCN + EEGNet (k=15) + EEGNet (k=25) — 3-model** | **22.18%** |
 
-The accepted baseline tables above are retained for comparison. The point-3 regression run measured 23.72% with independent model RNG streams, validation-selected SWA plus fitting-only BatchNorm recalibration, and no test-cohort adaptation.
+The accepted baseline tables above are retained for comparison. A later historical point-3 regression run measured 23.72% with independent model RNG streams, validation-selected SWA plus fitting-only BatchNorm recalibration, and no test-cohort adaptation; the current locked result is described below.
 
-### Current development recipe
+### Current locked recipe
 
 The default `--model ensemble --development-only` command uses the
 64-feature position-preserving DCN head and equal logit weights for all three
