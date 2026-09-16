@@ -316,10 +316,10 @@ The default `--model ensemble --development-only` command uses the
 64-feature position-preserving DCN head and equal logit weights for all three
 components. Its full development-only validation result is **23.21%**
 (181/780 correct), following per-trial common-average rereferencing and
-selective AdamW decay (biases and BatchNorm affine terms excluded). This is a
-development-only result; the held-out test partition has not been evaluated
-for this recipe. The fixed split and inductive evaluation protocol remain
-unchanged.
+selective AdamW decay (biases and BatchNorm affine terms excluded). After the
+recipe was locked, one frozen-checkpoint test evaluation scored **26.28%**
+(205/780 correct). It performed no training, adaptation, or candidate
+selection. The fixed split and inductive evaluation protocol remain unchanged.
 
 ### Guided validation-only attempts
 

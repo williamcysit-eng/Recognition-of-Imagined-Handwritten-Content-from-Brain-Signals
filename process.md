@@ -632,3 +632,8 @@ the held-out test partition is not materialized for evaluation.
 
 The full run completed successfully in 28m58s. The accepted recipe now meets
 the 23% validation target without materializing the held-out test partition.
+
+After the recipe was locked, one checkpoint-only evaluation loaded the three
+selected artifacts without retraining, adaptation, or candidate selection.
+The equal-weight ensemble scored **26.28%** (205/780) on the held-out test
+partition; this result was not used to change the recipe.
