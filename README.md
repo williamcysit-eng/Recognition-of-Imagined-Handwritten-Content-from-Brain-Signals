@@ -362,6 +362,51 @@ The `acc20-k25-k35-logit-blend-20260916` run began training an independent
 EEGNet k=35 for a fixed k25/k35 blend, but was stopped before completion at
 the user's request. No validation result was produced, and the change was rolled back.
 
+The completed `acc21-k25-k35-logit-blend-20260918` run blended an independent
+EEGNet k=35 into the k=25 component at 25%, but tied the **24.49%** baseline
+(191/780; +0.00 percentage points), so the architecture was rolled back.
+
+The `acc22-k35-slow-branch-20260918` run replaced the k=25 component with
+EEGNet k=35, but validation fell to **23.46%** (183/780; −1.03 percentage
+points), so the architecture was rolled back.
+
+The `acc23-dual-dcn-head-blend-20260918` run blended compressed- and
+full-head DCN logits at fixed 75/25 weights, but validation fell to **24.10%**
+(188/780; −0.39 percentage points), so the architecture was rolled back.
+
+The `acc24-early-view-dcn-20260918` run added a matched-seed 0–600 ms DCN
+view and blended it equally with the full-window DCN, but validation reached
+only **24.36%** (190/780; −0.13 percentage points), so it was rolled back.
+
+The `acc25-equal-early-dcn-20260918` run promoted the 0–600 ms DCN to an
+equal fourth component, but validation fell to **23.21%** (181/780; −1.28
+percentage points), so the architecture was rolled back.
+
+The `acc26-multiscale-eegnet-20260918` run replaced EEGNet k=25 with a
+parameter-neutral 15/25/35-kernel temporal stem, but validation fell to
+**21.92%** (171/780; −2.57 percentage points), so it was rolled back.
+
+The `acc27-residual-attention-eegnet-20260918` run added an identity path
+around k=25 CBAM attention, but validation fell to **23.72%** (185/780; −0.77
+percentage points), so the architecture was rolled back.
+
+The `acc28-component-prior-correction-20260918` run corrected each ensemble
+component toward the fitting-set class prior before fusion, but validation
+fell to **24.10%** (188/780; −0.39 percentage points), so it was rolled back.
+
+The `acc29-shallow-bandpower-cnn-20260918` run blended a shallow log-bandpower
+CNN into the DCN family at 25%, but validation fell to **23.46%** (183/780;
+−1.03 percentage points), so the architecture was rolled back.
+
+The `acc30-dcn-projection80-20260918` run widened the position-preserving DCN
+projection from 64 to 80 channels, but validation fell to **21.79%** (170/780;
+−2.69 percentage points), so the architecture was rolled back.
+
+A final low-weight EEGInception branch was stopped before final validation at
+the user's wrap-up request and was rolled back. Across ten completed full MPS
+runs, no candidate exceeded the retained **24.49%** (191/780) recipe; all
+architecture source changes and rejected artifacts were removed.
+
 ### Prior locked evaluation — 32-feature interim recipe
 
 Before the 64-feature update, one inference-only evaluation of the frozen test

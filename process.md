@@ -699,3 +699,69 @@ loaded the accepted `acc17` artifacts. The fitting-prior correction used the
 fitting partition only, and no retraining, adaptation, or candidate selection
 occurred. The fixed recipe scored **25.64%** (200/780) on the test partition;
 the result was not used for any subsequent recipe decision.
+
+---
+
+## Part 18: Guided validation-only optimization toward 26% (2026-09-18)
+
+The full MPS run used `.venv/bin/python src/train.py --model ensemble
+--development-only --seed 42`; the explicit test path remained unused.
+
+| Run | New idea | Development result | Decision |
+|---|---|---:|---|
+| `acc21-k25-k35-logit-blend-20260918` | Blend an independently trained EEGNet k=35 into the k=25 component at fixed 25% logit weight | **24.49% (191/780)** | Rejected tie; +0.00 percentage points |
+| `acc22-k35-slow-branch-20260918` | Replace the EEGNet k=25 component with an independently trained k=35 model | 23.46% (183/780) | Rejected; −1.03 percentage points |
+| `acc23-dual-dcn-head-blend-20260918` | Blend matched-seed compressed- and full-head DCN logits at fixed 75/25 weights | 24.10% (188/780) | Rejected; −0.39 percentage points |
+| `acc24-early-view-dcn-20260918` | Blend full-window compressed DCN and matched-seed 0–600 ms full-head DCN logits equally | 24.36% (190/780) | Rejected; −0.13 percentage points |
+| `acc25-equal-early-dcn-20260918` | Add the matched-seed 0–600 ms DCN as an equal fourth ensemble component | 23.21% (181/780) | Rejected; −1.28 percentage points |
+| `acc26-multiscale-eegnet-20260918` | Replace EEGNet k=25 with a parameter-neutral parallel 15/25/35-kernel temporal stem | 21.92% (171/780) | Rejected; −2.57 percentage points |
+| `acc27-residual-attention-eegnet-20260918` | Add an identity path around the EEGNet k=25 CBAM attention block | 23.72% (185/780) | Rejected; −0.77 percentage points |
+| `acc28-component-prior-correction-20260918` | Correct each component's fitting-derived class prior before equal logit fusion | 24.10% (188/780) | Rejected; −0.39 percentage points |
+| `acc29-shallow-bandpower-cnn-20260918` | Blend a shallow temporal-spatial log-bandpower CNN into the DCN family at 25% | 23.46% (183/780) | Rejected; −1.03 percentage points |
+| `acc30-dcn-projection80-20260918` | Widen the position-preserving DCN projection from 64 to 80 channels | 21.79% (170/780) | Rejected; −2.69 percentage points |
+| `acc31-low-weight-eeg-inception-20260918` | Add EEGInception as a fourth branch at 0.2 relative logit weight | Not measured | Interrupted before final evaluation; rolled back |
+
+The run completed in 43m36s. EEGNet k=35 reached 20.77%, and the k25/k35
+blend reached 21.79%, but the final ensemble did not improve. Source and
+generated artifacts were rolled back.
+
+The k35 replacement run completed in 29m55s. Although EEGNet k=35 reached
+20.77%, the final ensemble fell to 23.46%; source and generated artifacts were
+rolled back.
+
+The dual-head DCN run completed in 33m15s. The full-head model reached 17.44%
+and their blend reached 16.54%, but the final ensemble fell to 24.10%; source
+and generated artifacts were rolled back.
+
+The early-view DCN run completed in 29m59s. Its DCN-family blend reached
+19.23% and the two-family ensemble reached 22.44%, but the final ensemble
+reached only 24.36%; source and generated artifacts were rolled back.
+
+The equal early-component run completed in 29m52s. Increasing the early DCN's
+ensemble influence reduced the final result to 23.21%; source and generated
+artifacts were rolled back.
+
+The multi-scale EEGNet run completed in 1h03m. The replacement reached 17.05%
+standalone and reduced the final ensemble to 21.92%; source and generated
+artifacts were rolled back.
+
+The residual-attention run completed in 29m13s. Its replacement reached 19.87%
+standalone and reduced the final ensemble to 23.72%; source and generated
+artifacts were rolled back.
+
+The component-prior run completed in 29m05s and reduced the final ensemble to
+24.10%; source and generated artifacts were rolled back.
+
+The shallow bandpower run completed in 33m37s. The added model reached 7.44%
+standalone and reduced the final ensemble to 23.46%; source and generated
+artifacts were rolled back.
+
+The width-80 DCN run completed in 28m55s. Its DCN reached 13.85% standalone
+and reduced the final ensemble to 21.79%; source and generated artifacts were
+rolled back.
+
+The low-weight EEGInception run was stopped at the user's wrap-up request after
+47m41s, during EEGInception epoch 29 and before final validation. It therefore
+does not count as a completed idea or comparable result. Across ten completed
+full MPS runs, the best score remained the starting **24.49% (191/780)**; no
+architecture change was retained.
